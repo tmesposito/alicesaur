@@ -1,34 +1,13 @@
 #!/usr/bin/env python
 
 import os
-import sys
-import argparse
 import pdb
 import numpy as np
 import json
 from glob import glob
 from astropy.io import ascii, fits
-from astropy import table
-from astropy import wcs
 from scipy.ndimage import gaussian_filter, median_filter
 from scipy.ndimage import filters, map_coordinates
-
-
-def load_info(infoDir):
-    try:
-        infos = glob(infoDir + "info.json")
-        if len(infos) < 1:
-            infos = glob(infoDir + "../info.json")
-        with open(infos[0]) as ff:
-            info = json.load(ff)
-        infoPath = os.path.normpath(infos[0])
-        print("\nLoaded info from {}".format(infoPath))
-    except:
-        info = {}
-        infoPath = ''
-        print("\nFailed to load info")
-    
-    return info, infoPath
 
 
 def make_radii(arr, cen):
@@ -295,11 +274,11 @@ def make_spikemask_stis(img, ctr, angles, width=10.):
     y,x = np.mgrid[:img.shape[0], :img.shape[1]]
 
     if width == 0.:
-        mask = np.zeros((y.shape[0], x.shape[1]), dtype=np.bool)
+        mask = np.zeros((y.shape[0], x.shape[1]), dtype=bool)
     else:
         yy = y - ctr[0]
         xx = x - ctr[1]
-        mask = np.zeros((yy.shape[0], yy.shape[1]), dtype=np.bool)
+        mask = np.zeros((yy.shape[0], yy.shape[1]), dtype=bool)
 
         for ang in np.radians(angles):
             # Slope times x for each spike.
@@ -574,27 +553,61 @@ def combine_final_fits(fl):
 
 def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None,
                  nwalkers=100, niter=1000, nburn=0, nthreads=1, plot=True,
-                 log_path=None, sIdent='999'):
+                 log_path='', sIdent='999'):
     """
     Inputs:
-      func_lnlike: function, to compute the natural log likelihood.
-      p0: nwalker x ndim array, with starting positions for each walker.
-      priors: dict, 
+
+      func_lnlike: function
+        Function used by the sampler to compute the natural log likelihood.
+
+      pkeys: list or array
+        String names of parameters varied by the sampler.
+
+      data: array
+        The data to be compared with a model by the sampler.
+
+      dataErr: array
+        The uncertainties on the data.
+
+      p0: arrays with dimensions of nwalkers x number of free parameters
+        Array with initial positions for each parameter for each walker.
+
+      priors: dict
+        Dict containing bounds for a flat (uniform) prior, with pkeys strings
+        for keys. Each value should be a tuple or list of prior lower bound
+        followed by prior upper bound. If priors=None, no prior will be used.
+
+      nwalkers: int
+        Number of walkers for the MCMC sampler.
+
+      niter: int
+        Number of iterations per walker to go into the final posterior
+        distribution sampling. This does not included nburn.
+
+      nburn: int
+        Number of "burn-in" iterations per walker to run at the start of the
+        sampling and then discard. These iterations will not be included in
+        the final posterior distribution sampling.
+
+      nthreads: int
+        Number of parallel processes to run during sampling. Default is 1.
+
+      log_path: str
+        Relative path to a directory inside which MCMC logs and files will be
+        saved. Default (empty string) is the current working directory.
+
+      plot: bool
+        True (default) to output trace and corner plots.
+
+      sIdent: str
+        String identifier for the current MCMC run, to be appended to filenames
+        for tracking results.
     """
     import matplotlib.pyplot as plt
     from emcee import EnsembleSampler
     import hickle
     from corner import corner
-    
-    if type(pkeys) == list:
-        pkeys = np.array(pkeys)
-        
-    # if type(p0) == list:
-    #     # p0 = np.array(p0)
-    #     # p0 = np.array([np.tile(p0[0], nwalkers), np.tile(p0[1], nwalkers)]).reshape(nwalkers,2)
-    #     p0 = np.array([np.random.normal(loc=p0[0], scale=np.abs(p0[0]*0.1), size=nwalkers),
-    #                    np.random.normal(loc=p0[1], scale=np.abs(p0[1]*0.1), size=nwalkers),]).reshape(nwalkers,2)
-    
+
     def mc_lnlike(pl, pkeys, priors, data, err, xx):
         
         # For affine-invariant ensemble sampler, run the prior test here.
@@ -605,9 +618,7 @@ def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None
         res = (data - func_model(xx, pl))/err
         
         return -0.5*(np.nansum(res**2))
-    
-    ndim = len(pkeys)
-    
+
     def mc_lnprior(pl, pkeys, priors):
         """
         Define the flat prior boundaries.
@@ -631,15 +642,22 @@ def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None
         
         # If get to here, all parameters pass the prior and returns 0.
         return 0.
-    
+
+
+    if type(pkeys) == list:
+        pkeys = np.array(pkeys)
+
+    ndim = len(pkeys)
+
     # Create MCMC sampler object.
     sampler = EnsembleSampler(nwalkers, ndim, mc_lnlike,
-                    args=[pkeys, priors, data, dataErr, xx],
-                    threads=nthreads)
-    
+                              args=[pkeys, priors, data, dataErr, xx],
+                              threads=nthreads)
+
     if nburn > 0:
         print("\nBURN-IN START...\n")
-        for bb, (pburn, lnprob_burn, lnlike_burn) in enumerate(sampler.sample(p0, iterations=nburn)):
+        for bb, (pburn, lnprob_burn, lnlike_burn) in enumerate(sampler.sample(
+                                         p0, iterations=nburn, progress=True)):
             # Print progress every 25%.
             if bb in [nburn/4, nburn/2, 3*nburn/4]:
                 print("PROCESSING ITERATION %d; BURN-IN %.1f%% COMPLETE..." % (bb, 100*float(bb)/nburn))
@@ -675,43 +693,17 @@ def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None
     # ------ MAIN PHASE ------ #
     
     print("\nMAIN-PHASE MCMC START...\n")
-    # if partemp:
-    #   for nn, (pp, lnprob, lnlike) in enumerate(sampler.sample(pburn, lnprob0=lnprob_burn, lnlike0=lnlike_burn, iterations=niter)):
-    #       # if np.any(np.isnan(lnprob)):
-    #       #     print("WE'VE GOT A NAN LNPROB!!")
-    #       #     pdb.set_trace()
-    #       # Print progress every 25%.
-    #       if nn in [niter/4, niter/2, 3*niter/4]:
-    #           print("PROCESSING ITERATION %d; MCMC %.1f%% COMPLETE..." % (nn, 100*float(nn)/niter))
-    #           # Log the full sampler or chain (all temperatures) every so often.
-    #           try:
-    #               # Delete some items from the sampler that don't hickle well.
-    #               sampler_dict = sampler.__dict__.copy()
-    #               for item in ['pool', 'logl', 'logp', 'logpkwargs', 'loglkwargs']:
-    #                   try:
-    #                       sampler_dict.__delitem__(item)
-    #                   except:
-    #                       continue
-    #               hickle.dump(sampler_dict, log_path + '%s_mcmc_full_sampler.hkl' % s_ident, mode='w')
-    #               print("Sampler logged at iteration %d." % nn)
-    #           except:
-    #               hickle.dump(sampler.chain, log_path + '%s_mcmc_full_chain.hkl' % s_ident, mode='w')
-    # else:
-    for nn, (pp, lnprob, lnlike) in enumerate(sampler.sample(pburn, log_prob0=lnprob_burn, iterations=niter, tune=True, progress=True)):
+
+    for nn, (pp, lnprob, lnlike) in enumerate(sampler.sample(pburn,
+                            log_prob0=lnprob_burn, iterations=niter, tune=True,
+                            progress=True, skip_initial_state_check=True)):
         # Print progress every 25%.
         if nn in [niter/4, niter/2, 3*niter/4]:
-            print("PROCESSING ITERATION %d; MCMC %.1f%% COMPLETE..." % (nn, 100*float(nn)/niter))
+            # print("PROCESSING ITERATION %d; MCMC %.1f%% COMPLETE..." % (nn, 100*float(nn)/niter))
             # Log the full sampler or chain (all temperatures) every so often.
             try:
                 # Delete some items from the sampler that don't hickle well.
                 sampler_dict = sampler.__dict__.copy()
-                # if partemp:
-                #   for item in ['pool', 'logl', 'logp', 'logpkwargs', 'loglkwargs']:
-                #       try:
-                #           sampler_dict.__delitem__(item)
-                #       except:
-                #           continue
-                # else:
                 for item in ['pool', 'lnprobfn', 'runtime_sortingfn', '_random', 'kwargs']:
                     try:
                         sampler_dict.__delitem__(item)
@@ -737,8 +729,6 @@ def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None
     
     # Get median values (50th percentile) and 1-sigma (68%) confidence intervals
     # for each parameter (in order +, -).
-    # params_med_mcmc = map(lambda vv: (vv[1], vv[2]-vv[1], vv[1]-vv[0]),
-    #                     zip(*np.percentile(samples, [16, 50, 84], axis=0)))
     params_med_mcmc = list(map(lambda vv: (vv[1], vv[2]-vv[1], vv[1]-vv[0]),
                         np.percentile(samples, [16, 50, 84], axis=0).T))
     
@@ -760,25 +750,18 @@ def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None
             ax = fig.add_subplot(int(sbpl))
             for ww in range(nwalkers):
                 ax.plot(range(0,niter), ch[ww,:,ff], 'k-', alpha=10./nwalkers)
-            # if nburn > 0:
-            #     ax.axvspan(0, nburn, facecolor='lightgray', zorder=0, edgecolor='None')
-            # ax.set_ylabel(r'%.12s (d %d)' % (pkeys[ff], ff))
             if pkeys[ff] != 'None':
                 ax.set_ylabel(r'%s (%d)' % (pkeys[ff], ff), fontsize=fontSize+2)
             if aa%2==1:
                 ax.yaxis.tick_right()
                 ax.yaxis.set_label_position('right')
             ax.tick_params(labelsize=fontSize+1)
-            # ax.set_ylim(range_dict[pkeys[ff]][0], range_dict[pkeys[ff]][1])
-            # ax.set_xlabel('step number')
-            # ax.set_title(r'%s' % pkeys[ff])
-            # pdb.set_trace()
+
         # Remove xtick labels from all but bottom panels.
         for ax in fig.get_axes()[:-2]:
             ax.set_xticklabels(['']*ax.get_xticklabels().__len__())
         fig.suptitle('Walkers, by iteration', fontsize=fontSize+3)
         fig.subplots_adjust(0.16, 0.06, 0.84, 0.92, wspace=0.05, hspace=0.1)
-        # plt.tight_layout()
         plt.draw()
         
         nthin = 1 # ignore thinning for now
@@ -807,6 +790,17 @@ def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None
                             range=range_tri, plot_density=False,
                             data_kwargs={'color':'0.6', 'alpha':0.2, 'ms':1.},
                             contour_kwargs={'colors':contour_colors})
+        if plot:
+            try:
+                fig.savefig(os.path.join(log_path, '%s_mcmc_walkers.png' % sIdent),
+                                format='png', dpi=300)
+            except:
+                print("Failed to save walker plot to file")
+            try:
+                fig_tri.savefig(os.path.join(log_path, '%s_mcmc_corner.png' % sIdent),
+                                format='png', dpi=300)
+            except:
+                print("Failed to save corner plot to file")
         
     return params_med_mcmc, params_ml_mcmc, sampler
 
@@ -941,3 +935,22 @@ def vmag_to_stmag(vmag, lambda_angs=None, stmag_lambda=None):
     stmag = vmag + stmag_lambda
     
     return stmag
+
+
+def load_info_json(infoDir):
+    """
+    Load dataset info and reduction parameters from an info.json file.
+    """
+    try:
+        infos = glob(os.path.join(infoDir, "info.json"))
+        if len(infos) < 1:
+            infos = glob(os.path.join(infoDir, "../info.json"))
+        with open(infos[0]) as ff:
+            info = json.load(ff)
+        infoPath = os.path.normpath(infos[0])
+        print("\nLoaded info from {}".format(infoPath))
+    except:
+        info = {}
+        infoPath = ''
+        print(f"\nFailed to load info.json from directory {infoDir}. "
+              + "Returning an empty dict.")
