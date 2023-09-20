@@ -2,6 +2,11 @@
 
 import pdb
 import numpy as np
+import json
+import matplotlib.pyplot as plt
+from matplotlib.colors import SymLogNorm
+from matplotlib import patches
+from astropy.io import fits
 
 # Internal imports
 from alicesaur import utils
@@ -203,5 +208,83 @@ def mask_charge_bleed(mask, data, cen, paOffset=0.):
     """
 
     pass
+
+    return
+
+
+def show_masks(im, info, infoMode='bar10', imCat='sci', cen=None):
+    """
+    Plot an image and overplot the masks specified for it in its associated
+    info.json file. The central radius mask is cyan, rectangle is gray, and
+    point circles are red.
+
+    Inputs:
+        im: str or ndarray
+            Either the str path to a FITS image to load or the numpy array of
+            the image itself.
+        info: str or dict
+            Either the str path to the image's info.json file or the dict
+            loaded from the json itself.
+        infoMode: str
+            The "image mode" specifier in the info.json to identify
+            which masks to use; e.g., 'bar10' or 'wedgeb1.0'.
+        imCat: str
+            The sub-category of the image in the info.json, usually either
+            'sci' (default) for science image or 'ref' for reference image.
+        cen: ndarray of float
+            The (y,x) coordinates of the center (origin) to which all of the
+            mask coordinates are relative.
+    """
+
+    print(f"infoMode: {infoMode}")
+    print(f"imCat: {imCat}")
+
+    if type(im) is str:
+        data = fits.getdata(im)
+        hdr = fits.getheader(im)
+    else:
+        data = im
+        hdr = None
+
+    # Define center to which mask coordinates are relative.
+    if cen is None:
+        if hdr is not None:
+            cen = np.array([hdr.get('PSFCENTY', data.shape[0]//2),
+                            hdr.get('PSFCENTX', data.shape[1]//2)])
+        else:
+            cen = np.array([data.shape[0]//2, data.shape[1]//2])
+
+    if type(info) is str:
+        with open(info) as ff:
+            info = json.load(ff)
+
+    fig = plt.figure()
+    ax = plt.subplot(111)
+    ax.imshow(data, norm=SymLogNorm(linthresh=0.1, linscale=1., vmin=0,
+                                    vmax=np.nanmax(data/2.), base=10))
+    pointMasks = info[infoMode]['exclude'][imCat].get('point_yxr', [])
+    rectMasks = info[infoMode]['exclude'][imCat].get('rect_cenYX_widthYX_angleDeg', [])
+    rinMask = info[infoMode]['exclude'][imCat].get('r_in', 0.)
+    routMask = info[infoMode]['exclude'][imCat].get('r_out', 0.)\
+
+    if (rinMask > 0.) or (routMask > 0.):
+        circIn = patches.Circle(cen[::-1], radius=rinMask, edgecolor='c', facecolor='None')
+        circOut = patches.Circle(cen[::-1], radius=routMask, edgecolor='c', facecolor='None')
+        ax.add_patch(circIn)
+        ax.add_patch(circOut)
+
+    for pt in pointMasks:
+        circ = patches.Circle((pt[1], pt[0]), radius=pt[2], edgecolor='r', facecolor='None')
+        ax.add_patch(circ)
+
+    for rt in rectMasks:
+        # The xy anchor point is the lower left corner of the rectangle.
+        rect = patches.Rectangle((rt[0][1]-rt[1][1]//2, rt[0][0]-1.5*rt[1][0]),
+                                  width=rt[1][1], height=rt[1][0], angle=rt[2],
+                                  #rotation_point='center',
+                                  edgecolor='0.5', facecolor='None')
+        ax.add_patch(rect)
+
+    plt.show()
 
     return
