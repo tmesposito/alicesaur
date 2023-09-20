@@ -7,7 +7,7 @@ import pdb
 import time
 
 # Internal imports
-from alicesaur.pipeline.pipeline import Pipeline
+from alicesaur.pipeline.stis.pipeline_stis import PipelineSTIS
 
 
 if __name__ == "__main__":
@@ -20,9 +20,9 @@ if __name__ == "__main__":
                         default="./", type=str, nargs='?',
                         help=desc)
 
-    desc = 'Observation mode: bar10 or wedgeb1.0'
+    desc = 'Observation mode: bar10 or wedgeb1.0. Default is generic "nomode".'
     parser.add_argument('--obsMode', metavar='obsMode',
-                        default="bar10", type=str, nargs='?',
+                        default="nomode", type=str, nargs='?',
                         help=desc)
 
     desc = 'PSF subtraction mode: rdi, adi, pyklip-rdi, or pyklip-adi'
@@ -40,14 +40,14 @@ if __name__ == "__main__":
                         default=None, type=str, nargs='*',
                         help=desc)
 
-    desc = 'Number of annuli to use for subtraction optimization (default 1)'
-    parser.add_argument('--ann', metavar='ann',
-                        default=1, type=int, nargs='?',
-                        help=desc)
-
     desc = 'Width in [pixels] of diffraction spike masks. Default is to use the value in the info.json.'
     parser.add_argument('--spWidth', metavar='spWidth',
                         default=None, type=int, nargs='?',
+                        help=desc)
+
+    desc = 'Number of annuli to use for subtraction optimization (default 1)'
+    parser.add_argument('--ann', metavar='ann',
+                        default=1, type=int, nargs='?',
                         help=desc)
 
     desc = 'Flag to save the final image to FITS, overwriting any existing file.'
@@ -74,10 +74,14 @@ if __name__ == "__main__":
     parser.add_argument('--noErrorMaps', dest="noErrorMaps",
                         action="store_true", help=desc)
 
+    desc = 'Use --debug to enter debugger at various steps and plot some info.'
+    parser.add_argument('--debug',
+                        action="store_true", help=desc)
+
     args = parser.parse_args()
 
     # Create the reduction pipeline instance.
-    pl = Pipeline(**vars(args))
+    pl = PipelineSTIS(**vars(args))
 
     # Run the reduction.
     pl.run()

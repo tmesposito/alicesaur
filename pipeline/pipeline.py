@@ -2,12 +2,14 @@
 
 import os
 import sys
-import argparse
 import pdb
 import getpass
+import json
 import numpy as np
 from glob import glob
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+from matplotlib.colors import SymLogNorm
 from astropy.io import ascii, fits
 from astropy import table
 from astropy import wcs
@@ -25,10 +27,12 @@ from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
 
 class Pipeline(object):
     """
+    Base reduction pipeline class for Hubble Space Telescope image processing.
     """
 
     # Image pixel scale. Default to STIS value.
     pscale = 0.0507 # [arcsec/pixel]
+    debug = False
 
     def __init__(self, **kwargs):
 
@@ -36,8 +40,77 @@ class Pipeline(object):
         for key, val in kwargs.items():
             setattr(self, key, val)
 
-        # Ensure trailing slash in data directory name.
-        self.dataDir = os.path.join(os.path.expanduser(self.dataDir),'')
+        if hasattr(self, 'dataDir'):
+            # Ensure trailing slash in data directory name.
+            self.dataDir = os.path.join(os.path.expanduser(self.dataDir),'')
+        else:
+            self.dataDir = None
+
+        # Load dataset info and reduction parameters from info.json.
+        self.load_info_json(self.dataDir)
+
+
+    def load_info_json(self, infoDir):
+        """
+        Load dataset info and reduction parameters from an info.json file.
+        """
+        try:
+            infos = glob(os.path.join(infoDir, "info.json"))
+            if len(infos) < 1:
+                infos = glob(os.path.join(infoDir, "../info.json"))
+            with open(infos[0]) as ff:
+                self.info = json.load(ff)
+            self.infoPath = os.path.normpath(infos[0])
+            print("\nLoaded info from {}".format(self.infoPath))
+        except:
+            self.info = {}
+            self.infoPath = ''
+            print(f"\nFailed to load info.json from directory {infoDir}. "
+                  + "Filling it with default values.")
+
+        # Set info dict defaults if overriding values were not given in the
+        # json file.
+        self.info.setdefault('targetName', '')
+        self.info.setdefault('psfRefName', '')
+        self.info.setdefault('obsLogPath', '')
+        self.info.setdefault('diskPA_deg', 0.)
+        self.info.setdefault(self.obsMode.lower(), {})
+        # Background sampling region centers for science and reference images.
+        self.info[self.obsMode].setdefault('bgCen_yx', None)
+        # except KeyError as ee:
+        #     print("Error reading info.json at {}. Check for typos and missing keywords. Exiting.\n".format(ee))
+        #     sys.exit(1)
+        self.info[self.obsMode].setdefault('bgCenRef_yx', None)
+        # if not (np.all(bgCenRef is None) | (bgCenRef == '')):
+        #     bgCenRef = np.array(bgCenRef.split(' '), dtype=float)
+        # else:
+        #     bgCenRef = bgCen
+        self.info[self.obsMode].setdefault('bgCenFinal_yx', None)
+        # Background sampling radius [pix]
+        self.info[self.obsMode].setdefault('bgRadius', 40)
+        # Diffraction spike mask width [pix]
+        self.info[self.obsMode].setdefault('spWidth', 5)
+        self.info[self.obsMode].setdefault('radProfSub', {})
+        # Radon transform inner working angle [pix]
+        if self.obsMode.lower() in ['wedgeb1.8']:
+            self.info[self.obsMode].setdefault('radonIWA', 70)
+        else:
+            self.info[self.obsMode].setdefault('radonIWA', 30)
+        # starToUse is the optional forced star position
+        self.starToUse = self.info[self.obsMode].setdefault('starForce_yx',
+                                                            None)
+        if self.starToUse is not None:
+            self.forceStar = True
+            self.starToUse = np.array(self.starToUse)
+        else:
+            self.forceStar = False
+         # Masked exclusion region definitions for Science and Reference images
+        self.exclusions = self.info[self.obsMode].setdefault('exclude', {})
+        self.exclusionsSci = self.exclusions.setdefault('sci', {})
+        self.exclusionsRef = self.exclusions.setdefault('ref', {})
+        # PSF subtraction inner and outer radii.
+        self.exclusionsSci.setdefault('r_in', 5)
+        self.exclusionsSci.setdefault('r_out', 70)
 
 
     def load_imgs(self, suffix='sx2'):
@@ -119,24 +192,24 @@ class Pipeline(object):
     def load_obs_log(self, logPath=None):
         """
         """
-    
+
         if logPath is not None:
             logList = [logPath]
         else:
             logList = glob(self.dataDir + 'obs_log*.csv')
             if len(logList) == 0:
                 logList = glob(self.dataDir + '../obs_log*.csv')
-    
+
         try:
-            obsTable = ascii.read(os.path.expanduser(logList[0]),
-                                    delimiter=",",
-                                    header_start=0,
-                                    data_start=1,
-                                    guess=True)
+            self.obsTable = ascii.read(os.path.expanduser(logList[0]),
+                                       delimiter=",",
+                                       header_start=0,
+                                       data_start=1,
+                                       guess=True)
         except:
-            obsTable = None
-    
-        return obsTable
+            self.obsTable = None
+
+        return self.obsTable
 
 
     def combineOrbitImgs(self, imgs, orientats, sciInds, refInds):
@@ -209,87 +282,75 @@ class Pipeline(object):
         noCombine = self.noCombine
         pad = not self.noPad
 
-# FIX ME!!! DEPRECATED??
         roiY = [-200, 200]
-        roiX = [-200, 100]
+        roiX = [-200, 200]
 
 
         # # Summarize the dataset info from FITS headers.
         # if len(glob(dataDir + 'obs_log*.csv')) < 1:
         #   summarize_obs(dataDir, suffix=suff, dsName=None)
 
-        # Load info.json.
-        info, infoPath = utils.load_info(dataDir)
+        # Fetch dataset info and reduction parameters from info.json.
+        info, infoPath = self.info, self.infoPath
 
         # Set reduction parameters based on info.json if overriding values were not given
         # as input args.
-        if targ == '':
-            targ = info.setdefault('targetName', '')
-        psfRefName = info.setdefault('psfRefName', '')
+        if targ in ['', None]:
+            targ = self.info['targetName']
+        psfRefName = self.info['psfRefName']
         # Background sampling region centers for science and reference images.
-        try:
-            bgCen = info[obsMode].setdefault('bgCen_yx', None)
-        except KeyError as ee:
-            print("Error reading info.json at {}. Check for typos and missing keywords. Exiting.\n".format(ee))
-            sys.exit(1)
+        bgCen = self.info[self.obsMode]['bgCen_yx']
         if not (np.all(bgCen is None) | (bgCen == '')):
             bgCen = np.array(bgCen.split(' '), dtype=float)
         else:
             bgCen = None
-        bgCenRef = info[obsMode].setdefault('bgCenRef_yx', None)
+        bgCenRef = self.info[self.obsMode]['bgCenRef_yx']
         if not (np.all(bgCenRef is None) | (bgCenRef == '')):
             bgCenRef = np.array(bgCenRef.split(' '), dtype=float)
         else:
             bgCenRef = bgCen
-        exclusions = info[obsMode].setdefault('exclude', {}) # masked region definitions
-        exclusionsSci = exclusions.setdefault('sci', {}) # science masking
-        sub_r_in = exclusionsSci.setdefault('r_in', 5) # PSF subtraction inner radius
-        sub_r_out = exclusionsSci.setdefault('r_out', 70) # PSF subtraction outer radius
-        bgRadius = info[obsMode].setdefault('bgRadius', 40) # background sampling radius [pix]
+        bgRadius = self.info[self.obsMode]['bgRadius'] # background sampling radius [pix]
         if self.spWidth is None:
-            spWidth = info[obsMode].setdefault('spWidth', 5) # diffraction spike mask width [pix]
-        if obsMode.lower() in ['wedgeb1.8']:
-            radonIWA = info[obsMode].get('radonIWA', 70) # radon transform inner working angle [pix]
-        else:
-            radonIWA = info[obsMode].get('radonIWA', 30)
-        starToUse = info[obsMode].get('starForce_yx', None) # forced star position
-        if starToUse is not None:
-            forceStar = True
-            starToUse = np.array(starToUse)
-        else:
-            forceStar = False
-    
+            self.spWidth = self.info[self.obsMode]['spWidth'] # diffraction spike mask width [pix]
+        radonIWA = self.info[self.obsMode]['radonIWA']
+        exclusions = self.info[self.obsMode]['exclude'] # masked region definitions
+        exclusionsSci = self.exclusionsSci # science masking
+        sub_r_in = self.exclusionsSci['r_in'] # PSF subtraction inner radius
+        sub_r_out = self.exclusionsSci['r_out'] # PSF subtraction outer radius
+        starToUse = self.starToUse
+        forceStar = self.forceStar
+
         # Load observation log.
-        obsTable = self.load_obs_log(logPath=info.get('obsLogPath'))
-    
+        self.load_obs_log(logPath=info.get('obsLogPath'))
+
         # Load images to be processed.
         # Returns list where [0] = data from each fits, [1] = headers from each fits.
         # Each item in [0] and [1] is also a list of arrays.
         print("Loading data...")
         imgsHdrs, targs, fl = self.load_imgs(suffix=suff)
-    
+
         # Get input image intensity units.
         bunit = imgsHdrs[1][0][1]['BUNIT']
-    
+
         # Separate science frames from PSF reference frames via the target name.
         sciInds = np.where(np.char.lower(targs) == targ.lower())[0]
         refInds = np.where(np.char.lower(targs) != targ.lower())[0]
         # Number of input science and reference frames (before any combinations)
         nSci = np.size(sciInds)
         nRef = np.size(refInds)
-        
+
         print("\nScience image indices: {}".format(sciInds))
         print("Ref image indices ({}): {}\n".format(targs[refInds], refInds))
-        
+
         # Get UT observation date, proposed aperture name, orientat angles, and
         # rough star coordinates from headers.
         obsDate = imgsHdrs[1][sciInds[0]][0]["TDATEOBS"] # [UT]
         propAper = imgsHdrs[1][sciInds[0]][0]["PROPAPER"]
         orientats = np.array([imgsHdrs[1][ii][1]["ORIENTAT"] for ii in range(len(imgsHdrs[0]))])
-    
+
         exptimes_s = [imgsHdrs[1][ii][0].get('TEXPTIME', -1) for ii in sciInds] # [s]
         photflam_avg = np.mean([imgsHdrs[1][ii][0].get('PHOTFLAM', -1.) for ii in sciInds])
-    
+
         # Either force star position or estimate based on headers.
         if forceStar:
             starFromWCS = starToUse
@@ -302,19 +363,25 @@ class Pipeline(object):
                 targDec = hdr[0]['DEC_TARG']
                 starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
             starFromWCS = np.mean(starFromWCS_list, axis=0)
-    
+
         # Check number of images per fits file.
         nImgsPerFits = [len(imgsHdrs[0][ii]) for ii in range(len(imgsHdrs[0]))]
         print("Data arrays per fits file: {}".format(nImgsPerFits))
-    
+
         # Separate images into their own 3-d array. Includes Sci and Ref images.
         sciImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
-    
+
+
+    # ========== FIX BAD PIXELS ========== #
         # Fix bad pixels iteratively in all images.
         if not self.noFixPix:
             intenseROI = 460
-            sciImgs = fix_bad_pix(sciImgs, intensify=[int(starFromWCS[0])-intenseROI//2, int(starFromWCS[1])-intenseROI//2, intenseROI, intenseROI])
-    
+            sciImgs = fix_bad_pix(sciImgs,
+                                  intensify=[int(starFromWCS[0])-intenseROI//2,
+                                             int(starFromWCS[1])-intenseROI//2,
+                                             intenseROI, intenseROI])
+
+    # ========== CALIBRATE FLUX ========== #
         # Convert intensity to counts per second.
         newUnit = 'COUNTS S-1'
         # newUnit = 'mJy arcsec-2'
@@ -322,7 +389,8 @@ class Pipeline(object):
                                     pscale=self.pscale) # [counts/s]
         bunit = newUnit
         print("Converted image intensity units to {}".format(newUnit))
-    
+
+    # ========== AVERAGE IMAGES BY ORBIT ========== #
         # Combine individual exposures in an orbit to make one image.
         # Redefine orientats and indices based on these combined images.
         if (not noCombine) and (psfSubMode.lower() not in ['pyklip-rdi']):
@@ -331,12 +399,12 @@ class Pipeline(object):
                                                                   sciInds, refInds)
         else:
             orbitImgs = sciImgs.copy()
-    
+
         # Apply distortion correction if needed (sx2 already corrected/"rectified")
         if suff not in ['sx2']:
     # FIX ME!!! Add distortion correction step
             pass
-    
+
         # Mask out occulting wedges (later replacing with NaN values).
     # TEMP!!! Hardcoded for distortion corrected images only right now.
         if 'bar' in obsMode:
@@ -365,16 +433,15 @@ class Pipeline(object):
                 print("Assuming all stars at {}".format(starFromWCS))
             else:
                 print("\nRadon transforming image {}...".format(ii))
-                # HD 106906 is special case with dithering along wedge.
-                if targ == 'HD-106906':
+                # HD 106906 wedgeb1.8 is special case with dithering along
+                # wedge, so handle that here.
+                if (targ == 'HD-106906') and (obsMode == 'wedgeb1.8'):
                     stars.append(find_star_radon(imgIter, starFromWCS_list[ii], spikeAngles,
                                     IWA=radonIWA, sp_width=20, r_mask=None)) # [pixels] y,x
                 else:
                     stars.append(find_star_radon(imgIter, starFromWCS, spikeAngles,
                                     IWA=radonIWA, sp_width=20, r_mask=None)) # [pixels] y,x
-                # print("\n**** WARNING!!! Faking star centers for testing speed up!!! ****\n")
-                # stars.append(np.array([344.76, 253.14]))
-                # stars.append(np.array([740.55, 984.25])) # for GSC... bar10 hardcode
+
         stars = np.array(stars) # [pixels] y,x
     
         # Define new aligned star position.
@@ -384,18 +451,19 @@ class Pipeline(object):
         else:
             matSize = None
             alignStar = np.round(stars[0])
-    
+
         # Register images to align stars.
+        # Also pad the images to matSize if self.noPad is not set.
         print("\nAligning images and masks to common star position...")
         alignImgs = []
         alignMasks = []
         for ii in tqdm(range(len(orbitImgs)), desc="Aligned images"):
             alignImgs.append(shift_pix_to_pix(orbitImgs[ii], stars[ii],
                                               finalYX=alignStar, outputSize=matSize,
-                                              order=3))
+                                              order=3, fill=0.))
             alignMasks.append(shift_pix_to_pix(occultMask, stars[ii],
                                                finalYX=alignStar, outputSize=matSize,
-                                               order=1))
+                                               order=1, fill=-1e4))
         alignImgs = np.array(alignImgs)
         alignMasks = np.array(alignMasks)
         # alignImgs = np.array([shift_pix_to_pix(orbitImgs[ii], stars[ii], finalYX=alignStar, outputSize=matSize, order=3) for ii in range(len(orbitImgs))])
@@ -410,35 +478,40 @@ class Pipeline(object):
         alignStarOffsets = stars - starsOriginal
     
     # # TEMP!!! TESTING alignment
-        # fig = plt.figure(3)
-        # for ii in range(len(alignImgs)):
-        #     st = np.round(stars[ii]).astype(int)
-        #     fig.clf()
-        #     ax = plt.subplot(111)
-        #     ax.imshow(alignImgs[ii][st[0]+roiY[0]:st[0]+roiY[1], st[1]+roiX[0]:st[1]+roiX[1]],
-        #               norm=SymLogNorm(linthresh=1., linscale=1., vmin=0., vmax=5000.))
-        #     ax.set_title("Aligned Image {}".format(ii))
-        #     plt.draw()
-        #     pdb.set_trace()
-        
-        # pdb.set_trace()
-        
+
+        if self.debug:
+            fig = plt.figure(3)
+            for ii in range(len(alignImgs)):
+                st = np.round(stars[ii]).astype(int)
+                fig.clf()
+                ax = plt.subplot(111)
+                ax.imshow(alignImgs[ii][st[0]+roiY[0]:st[0]+roiY[1],
+                                        st[1]+roiX[0]:st[1]+roiX[1]],
+                          norm=SymLogNorm(linthresh=1., linscale=1.,
+                                          vmin=0., vmax=5000.),
+                          extent=[st[1]+roiX[0], st[1]+roiX[1],
+                                  st[0]+roiY[0], st[0]+roiY[1]])
+                ax.scatter(x=st[1], y=st[0], marker='+', s=60, c='m')
+                ax.set_title("Aligned Image {}".format(ii))
+                plt.draw()
+                pdb.set_trace()
+
         noOffsetDatasets = ['V-AK-SCO', 'GSC-07396-00759', 'HD-106906', 'HD-111161',
                             'HD-114082', 'HD-115600', 'HD-117214',
                             'HD-129590', 'HD-145560', 'HD-146897']
-    
+
         psfsubOnSpikesOnly = False
-    
-    
+
+
     # ==== CREATE IMAGE MASKS ==== #
-    
+
         print("\nMaking PSF subtraction masks...")
         # Make mask for occulters and diffraction spikes.
         radii = utils.make_radii(alignImgs[0], alignStar)
         masks = []
         for ii, img in enumerate(alignImgs):
             spikemask = utils.make_spikemask_stis(alignImgs[0], alignStar,
-                                                  spikeAngles, width=spWidth)
+                                                  spikeAngles, width=self.spWidth)
     # FIX ME!!! Combine spikemask with occulter mask here.
             masks.append(spikemask)
         masks = np.array(masks)
@@ -518,13 +591,16 @@ class Pipeline(object):
                 alignMasks[ind] += maskSpikesOffaxis
                 psfSubMasks[ind][maskSpikesOffaxis < 0] = True
                 sourceMasks[ind][maskSpikesOffaxis < 0] = True
-    # # TESTING ONLY!!!
-    #             plt.figure(4)
-    #             plt.clf()
-    #             plt.imshow(alignMasks[ind])
-    #             plt.draw()
-    #             pdb.set_trace()
-    
+
+            if self.debug:
+                plt.figure(4)
+                plt.clf()
+                plt.imshow(alignMasks[ind])
+                plt.title("Occulter ('align') mask")
+                plt.draw()
+
+                pdb.set_trace()
+
         # Specialize reference masks. Default radius masks to match science masks.
         exclusionsRef = exclusions.setdefault('ref', {})
         # if exclusionsRef.get('r_out') is None:
@@ -556,27 +632,31 @@ class Pipeline(object):
                                             cen=alignStar, cenOffset=alignStarOffsets[ind],
                                             paOffset=0, spikeAngles=spikeAngles) #-1*orientats[ind])
     
-    # # TESTING ONLY!!!
-    #     ii = 0    
-    #     for ii in range(len(psfSubMasks)):
-    #         plt.figure(5)
-    #         plt.clf()
-    #         plt.imshow(psfSubMasks[ii])
-    #         
-    #         plt.figure(6)
-    #         plt.clf()
-    #         plt.imshow(alignImgs[ii],
-    #                    norm=SymLogNorm(linthresh=0.01, linscale=1,
-    #                                    vmin=0, vmax=100))
-    #         
-    #         plt.figure(7)
-    #         plt.clf()
-    #         plt.imshow(alignImgs[ii]*~sourceMasks[ii],
-    #                    norm=SymLogNorm(linthresh=0.01, linscale=1,
-    #                                    vmin=0, vmax=100))
-    #         
-    #         pdb.set_trace()
-        
+            if self.debug:
+                for ii in range(len(psfSubMasks)):
+                    plt.figure(5)
+                    plt.clf()
+                    plt.imshow(psfSubMasks[ii])
+                    plt.title(f"PSF Subtraction mask: img {ii}")
+
+                    plt.figure(6)
+                    plt.clf()
+                    plt.imshow(alignImgs[ii],
+                                norm=SymLogNorm(linthresh=0.01, linscale=1,
+                                                vmin=0, vmax=100))
+                    plt.title(f"Aligned image: img {ii}")
+
+                    plt.figure(7)
+                    plt.clf()
+                    plt.imshow(alignImgs[ii]*~sourceMasks[ii],
+                                norm=SymLogNorm(linthresh=0.01, linscale=1,
+                                                vmin=0, vmax=100))
+                    plt.title(f"Aligned image with PSF Subtraction mask: img {ii}")
+
+                    pdb.set_trace()
+
+    # ==== BACKGROUND SUBTRACTION ==== #
+
         # Subtract background/sky.
         bgs = []
         if bgCen is not None:
@@ -602,7 +682,7 @@ class Pipeline(object):
                 alignImgs[ii] = im - bg
                 bgs.append(bg)
         print("Background means subtracted: {}".format(bgs))
-        
+
     # # BG TESTING!!!
     #     plt.figure(5)
     #     plt.clf()
@@ -612,8 +692,10 @@ class Pipeline(object):
     #         plt.xlim(1024-200, 1024+201)
     #         plt.draw()
     #         pdb.set_trace()
-        
-    
+
+
+    # ======== PSF SUBTRACTION ======== #
+
         # Basic RDI PSF subtraction.
         if psfSubMode.lower() == 'rdi':
             print("Performing RDI PSF subtraction...")
@@ -659,7 +741,7 @@ class Pipeline(object):
             # Mask out the occulters in the input images.
             alignImgsMasked = alignImgs + alignMasks
             alignImgsMasked[alignMasks < 0] = np.nan
-            # breakpoint()
+
             stis_psfsub.do_klip_stis(targ, fl[sciInds], inputImgs=alignImgsMasked[sciInds], inputHdrs=None,
                 psfPaths=fl, psfImgs=alignImgsMasked, mode='RDI',
                 ann=int(OWA-IWA), subs=1, minrot=0, mvmt=0, IWA=IWA, OWA=OWA,
@@ -728,6 +810,8 @@ class Pipeline(object):
             # 
             # pdb.set_trace()
             
+            # Subtract radial profile from final combined image to remove
+            # residual halo.
             subFinalRadProf = False
             if (info[obsMode].get('radProfSub') is not None):
                 if info[obsMode]['radProfSub'].get('postCombine') == 'True':
@@ -757,6 +841,28 @@ class Pipeline(object):
                     meanRadProf = np.nan_to_num(meanRadProf, 0)
                     finalImg -= meanRadProf
                     subFinalRadProf = True
+
+                    if self.debug:
+                        plt.figure(15)
+                        plt.clf()
+                        plt.imshow(finalMask)
+                        plt.title("Mask for post-combine\nradial profile measurement")
+
+                        plt.figure(16)
+                        plt.clf()
+                        plt.imshow(tmpImg,
+                                   norm=SymLogNorm(linthresh=0.01, linscale=1,
+                                                   vmin=-0.1, vmax=10))
+                        plt.title("Post-combine image masked\nfor radial profile measurement")
+
+                        plt.figure(17)
+                        plt.clf()
+                        plt.imshow(meanRadProf,
+                                   norm=SymLogNorm(linthresh=0.01, linscale=1,
+                                                   vmin=-0.1, vmax=10))
+                        plt.title("Post-combine radial profile measured")
+
+                        pdb.set_trace()
             
             # Do one final background subtraction.
             if info[obsMode].get('bgCenFinal_yx') is not None:
@@ -816,7 +922,7 @@ class Pipeline(object):
                 hdu.header['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
                 hdu.header['ORBCOMBI'] = (not noCombine, 'Stacked images per orbit before PSF sub?')
                 hdu.header['ANNULI'] = (ann, 'Number of subtraction region annuli')
-                hdu.header['SPWIDTH'] = (spWidth, 'Diff. spike mask width (pix)')
+                hdu.header['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
                 hdu.header['RADPROFS'] = (subRadProf, 'Residual radial profile subtracted?')
                 if subFinalRadProf:
                     hdu.header.add_comment('Post-collapse radial profile subtracted')
@@ -941,7 +1047,7 @@ class Pipeline(object):
                         hdu.header['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
                         hdu.header['ORBCOMBI'] = (not noCombine, 'Stacked images per orbit before PSF sub?')
                         hdu.header['ANNULI'] = (ann, 'Number of subtraction region annuli')
-                        hdu.header['SPWIDTH'] = (spWidth, 'Diff. spike mask width (pix)')
+                        hdu.header['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
                         hdu.header['RADPROFS'] = (subRadProf, 'Residual radial profile subtracted?')
                         hdu.header.add_comment('{} PSF-subtracted combined image'.format(psfSubMode))
                         hdu.header.add_comment('Reduction info file: {}'.format(infoPath))
