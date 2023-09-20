@@ -63,7 +63,8 @@ def find_star_radon(img, cen, spikeAngles, IWA=25., sp_width=30, r_mask=21.,
     return np.array([y_cen, x_cen])
 
 
-def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3):
+def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3,
+                     fill=0.):
     """
     Shift interpolate an image so reference pixel ends up at new coordinates.
 
@@ -74,6 +75,8 @@ def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3):
             Default is center of img.
         outputSize: tuple of y,x dimensions for output array to have [pix].
             Default (None) will output the same dimensions as img.
+        fill: float
+            Value with which to fill empty new pixels.
     """
 
     # Default final coordinates are center of array.
@@ -84,7 +87,7 @@ def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3):
     # imgClean = np.nan_to_num(img)
 
     if outputSize is not None:
-        mat = np.zeros(outputSize)
+        mat = np.zeros(outputSize) + fill
         mat[:img.shape[0], :img.shape[1]] = img.copy()
     else:
         mat = img
@@ -93,7 +96,8 @@ def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3):
     sh_x = finalYX[1] - refYX[1]
 
     # Shift the array to put coords at new_cen.
-    imgShift = interpolation.shift(mat, [sh_y, sh_x], order=order, mode='constant', cval=0.)
+    imgShift = interpolation.shift(mat, [sh_y, sh_x], order=order,
+                                   mode='constant', cval=fill)
 
     # # If trimming image size, put the star at the center of the trimmed array
     # # so trimmed size is (2*size_out + 1, 2*size_out + 1).
