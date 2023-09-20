@@ -12,10 +12,14 @@ from glob import glob
 from astropy.io import ascii, fits
 from astropy import table
 from astropy import wcs
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
+from scipy.interpolate import interp2d
 from matplotlib.colors import SymLogNorm, LogNorm
-from hst_process.utils import make_radii
-from hst_process.plot.plot_utils import *
+
+# Internal imports
+from alicesaur.utils import make_radii, make_phi, make_1d_gauss, make_double_1d_gauss, unsharp, load_info_json, weighted_mean_1d
+from .plot_utils import *
+from alicesaur.calibration.flux import convert_intensity
 
 
 #---- DEFINE CONSTANTS ----#
@@ -32,7 +36,7 @@ def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
     nRow = len(targList)
     #fig = plt.figure(99)
     if makeColorbar:
-        spEdge = [0.55, 0.45, 0.1, 0.52] # left, bottom, right, top
+        spEdge = [0.25, 0.45, 0.14, 0.53] # left, bottom, right, top
     else:
         spEdge = [0.6, 0.5, 0, 0] # left, bottom, right, top
     fig, axAll = axMaker(nCol*nRow, axRC=[nRow, nCol], axSize=[1.5, 1.5],
@@ -58,10 +62,10 @@ def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
     axAll[0][0].text(0.5, 0.96, 'STIS: Average', c='w', fontsize=12,
         horizontalalignment='center', verticalalignment='top',
         transform=axAll[0][0].transAxes)
-    axAll[0][1].text(0.5, 0.96, 'STIS: Wedge', c='w', fontsize=12,
+    axAll[0][1].text(0.5, 0.96, 'STIS: Wide', c='w', fontsize=12,
         horizontalalignment='center', verticalalignment='top',
         transform=axAll[0][1].transAxes)
-    axAll[0][2].text(0.5, 0.96, 'STIS: Bar', c='w', fontsize=12,
+    axAll[0][2].text(0.5, 0.96, 'STIS: Narrow', c='w', fontsize=12,
         horizontalalignment='center', verticalalignment='top',
         transform=axAll[0][2].transAxes)
     axAll[0][3].text(0.5, 0.96, 'GPI: H Pol', c='w', fontsize=12,
@@ -75,7 +79,8 @@ def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
                     horizontalalignment='left', verticalalignment='bottom',
                     transform=axAll[ii][0].transAxes)
         targName = targList[ii]
-        if rescale_Qr_fluxcal[targName] != rescale_Qr_fluxcal['HD 114082']:
+        if (rescale_Qr_fluxcal[targName] != rescale_Qr_fluxcal['HD 114082']) and \
+            (rescale_Qr_fluxcal[targName] != 0):
             if rescale_Qr_fluxcal[targName] < 1:
                 scaleStr = 'x{:.2f}'.format(rescale_Qr_fluxcal[targName])
                 xStr = 0.7
@@ -91,9 +96,11 @@ def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
     for ii, ax in enumerate(axAll.flatten()):
         ax.yaxis.set_visible(False)
         ax.xaxis.set_visible(False)
+        ax.tick_params(which='major', length=3.5)
         # Left Y labels.
         if ax in axAll[:, 0]:
             ax.yaxis.set_visible(True)
+            ax.tick_params(labelleft=False)   
             ax.set_ylabel('')
             # pdb.set_trace()
             # if ax != axAll[nRow//2-1][0]:
@@ -188,7 +195,6 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
     from matplotlib import cm, patches
     from scipy.ndimage import shift, zoom
     from stis_disk_gallery_plot import det_fns
-    from hst_process.stis.stis_disk_process import convert_intensity
 
     pscale_gpi = 0.014166 # [arcsec/pix]
 
@@ -236,7 +242,17 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
     if stisCombo:
         cen_stis.append(cen_stis[0])
         if targName not in []:
-            stisCombo_im = np.nanmean(np.array(stis), axis=0)
+            if det_fns[targName].get('stisAverage', None) not in [None, '']:
+                comboPath = os.path.expanduser(det_fns[targName].get('stisAverage'))
+                with fits.open(comboPath) as hdu:
+                    stisCombo_im = hdu[0].data.copy()
+                    stisCombo_hdr = hdu[0].header
+                stisCombo_im = convert_intensity([stisCombo_im], [[None, stisCombo_hdr]],
+                                    unitStart='counts s-1', unitEnd='mjy arcsec-2',
+                                    gain=4.016, exptime=1, nCombine=1)[0]
+                print(f"Retrieved pre-combined STIS image for {targName} at {comboPath}")
+            else:
+                stisCombo_im = np.nanmean(np.array(stis), axis=0)
             stis.append(stisCombo_im)
         else:
             stis.append(np.nan*np.ones((2048,2048)))
@@ -892,7 +908,6 @@ def vertical_profile(fp, rad=60, highpass=None, diskPA=None, star=None,
     diskPA: disk major axis PA in [degrees]
     maxDiskWidth_pix: maximum "vertical" width of the disk in [pixels]
     """
-    from hst_process.utils import make_phi, make_1d_gauss, make_double_1d_gauss, unsharp
     from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
     from scipy.interpolate import interp2d
     
@@ -1194,7 +1209,6 @@ def vertical_profile_gp(fp, rad=60, highpass=None, diskPA=None, star=None,
       diskPA: disk major axis PA in [degrees]
       maxDiskWidth_pix: maximum "vertical" width of the disk in [pixels]
     """
-    from hst_process.utils import make_phi, make_1d_gauss, make_double_1d_gauss, unsharp
     from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
     from scipy.interpolate import interp2d
     
@@ -1405,7 +1419,6 @@ def vertical_profile_y(fp, rad=60, highpass=None, diskPA=None, star=None,
       diskPA: disk major axis PA in [degrees]
       maxDiskWidth_pix: maximum "vertical" width of the disk in [pixels]
     """
-    from hst_process.utils import make_phi, make_1d_gauss, make_double_1d_gauss, unsharp
     from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
     from scipy.interpolate import interp2d
     
@@ -1633,10 +1646,7 @@ def vertical_profile_y_gp(fp, rad=60, highpass=None, diskPA=None, star=None,
       diskPA: disk major axis PA in [degrees]
       maxDiskWidth_pix: maximum "vertical" width of the disk in [pixels]
     """
-    from hst_process.utils import make_phi, make_1d_gauss, make_double_1d_gauss, unsharp
-    from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
-    from scipy.interpolate import interp2d
-    
+
     # DEFINE some data cleaning and fitting parameters.
     dr = 1.5 # half-width of each slice in [pix]
     wx = 1 # [pix]
@@ -1666,7 +1676,7 @@ def vertical_profile_y_gp(fp, rad=60, highpass=None, diskPA=None, star=None,
 
     if star is None:
         star = np.array([hdr['PSFCENTY'], hdr['PSFCENTX']])
-    radii = make_radii(data, star)
+    # radii = make_radii(data, star)
 
 
     cut = np.nanmean(data[:, star[1]+rad-wx:star[1]+rad+wx+1], axis=1)
@@ -1723,20 +1733,31 @@ def vertical_profile_y_gp(fp, rad=60, highpass=None, diskPA=None, star=None,
                    np.array([p0_2[0]+2*fwhm_guess_phi, fwhm_guess_phi*2, p0_2[2]+2*fwhm_guess_phi, fwhm_guess_phi*4, 1e5, 1e5]))
 
  #--- SIDE 1 FITTING ---#
+
+# # TEMP!!!
+#     xPeak1_gp, xPeak1Err_lo_gp, xPeak1Err_up_gp, snr1 = fit_gp_1d(cut_clean,
+#                         dataRange,
+#                         indMinMax=(star[0] - dvert, star[0] + dvert),
+#                         err=cutErr_clean)
+
     try:
-        xPeak1_gp, xPeak1Err_lo_gp, xPeak1Err_up_gp = fit_gp_1d(cut_clean, dataRange,
-                        indMinMax=(star[0] - dvert, star[0] + dvert),
-                        p0=p0_1, bounds=bounds1, err=cutErr_clean)
+        xPeak1_gp, xPeak1Err_lo_gp, xPeak1Err_up_gp, snr1_gp = fit_gp_1d(
+                                cut_clean,
+                                dataRange,
+                                indMinMax=(star[0] - dvert, star[0] + dvert),
+                                err=cutErr_clean)
     except:
-        xPeak1_gp, xPeak1Err_lo_gp, xPeak1Err_up_gp = np.nan, np.nan, np.nan
+        xPeak1_gp, xPeak1Err_lo_gp, xPeak1Err_up_gp, snr1_gp = np.nan, np.nan, np.nan, np.nan
 
  #--- SIDE 2 FITTING ---#
     try:
-        xPeak2_gp, xPeak2Err_lo_gp, xPeak2Err_up_gp = fit_gp_1d(cut2_clean, dataRange,
-                        indMinMax=(star[0] - dvert, star[0] + dvert),
-                        p0=p0_2, bounds=bounds2, err=cut2Err_clean)
+        xPeak2_gp, xPeak2Err_lo_gp, xPeak2Err_up_gp, snr2_gp = fit_gp_1d(
+                                cut2_clean,
+                                dataRange,
+                                indMinMax=(star[0] - dvert, star[0] + dvert),
+                                err=cut2Err_clean)
     except:
-        xPeak2_gp, xPeak2Err_lo_gp, xPeak2Err_up_gp = np.nan, np.nan, np.nan
+        xPeak2_gp, xPeak2Err_lo_gp, xPeak2Err_up_gp, snr2_gp = np.nan, np.nan, np.nan, np.nan
 
     # plt.figure(30)
     # plt.clf()
@@ -1769,7 +1790,6 @@ def vertical_profile_y_gp(fp, rad=60, highpass=None, diskPA=None, star=None,
 
 
 def crosscorr_gauss_1d(yy, xx):
-    from hst_process.utils import make_1d_gauss
     from scipy.signal import correlate
     
     # matTemplate = np.zeros(len(xx)*2)
@@ -1790,7 +1810,6 @@ def crosscorr_gauss_1d(yy, xx):
 
 def fit_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None):
     from scipy.optimize import curve_fit
-    from hst_process.utils import make_1d_gauss
     
     if indMinMax is not None:
         yyFit = yy[indMinMax[0]:indMinMax[1]]
@@ -1813,7 +1832,6 @@ def fit_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None):
 def fit_double_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None, err=None):
     # from scipy.optimize import curve_fit
     from lmfit import Model
-    from hst_process.utils import make_1d_gauss, make_double_1d_gauss
     from scipy.interpolate import interp1d
     
     if indMinMax is not None:
@@ -1942,20 +1960,7 @@ def fit_gp_1d(yy, xx, indMinMax=None, err=None):
     xRange_fine = np.linspace(X.min(), X.max(), 10*len(X))
     xRange_fine_shaped = xRange_fine.reshape(-1,1)
     medians = (m.predict_quantiles(xRange_fine.reshape(xRange_fine.shape[0], 1), quantiles=[50.]))[0].flatten()
-    # conf_up3sig = (m.predict_quantiles(xRange_fine.reshape(10*(X.max() - X.min()), 1), quantiles=[99.7]))[0].flatten()
-    # conf_lo3sig = (m.predict_quantiles(xRange_fine.reshape(10*(X.max() - X.min()), 1), quantiles=[0.3]))[0].flatten()
-    conf_up3sig = (m.predict_quantiles(xRange_fine.reshape(xRange_fine.shape[0], 1), quantiles=[97.5]))[0].flatten()
-    conf_lo3sig = (m.predict_quantiles(xRange_fine.reshape(xRange_fine.shape[0], 1), quantiles=[2.5]))[0].flatten()
 
-    whPeak = np.argmax(medians)
-    xPeak = xRange_fine[whPeak]
-    peak_lo3sig = conf_lo3sig[whPeak]
-    xAbove_lo3sig = xRange_fine[np.where(medians > peak_lo3sig)]
-    xErr_lo = np.nanmin(xAbove_lo3sig)
-    xErr_up = np.nanmax(xAbove_lo3sig)
-    
-    # print(xErr_lo, xPeak, xErr_up)
-    
     # Get posterior samples
     posteriorYs = m.posterior_samples_f(xRange_fine_shaped, full_cov=True, size=1000)
     samples = posteriorYs[:,0]
@@ -1964,21 +1969,46 @@ def fit_gp_1d(yy, xx, indMinMax=None, err=None):
     simY_orig, simMse_orig = m.predict(X)
     res_bf = (Y - simY_orig).flatten()
     res_std = np.std(res_bf)
-    
+
     snr_bf_peak = np.nanmax(simY)/res_std
     print(f"SNR of best-fit model peak = {snr_bf_peak:.2f}")
+
+    # conf_up3sig = (m.predict_quantiles(xRange_fine.reshape(10*(X.max() - X.min()), 1), quantiles=[99.7]))[0].flatten()
+    # conf_lo3sig = (m.predict_quantiles(xRange_fine.reshape(10*(X.max() - X.min()), 1), quantiles=[0.3]))[0].flatten()
+    # conf_up3sig = (m.predict_quantiles(xRange_fine.reshape(xRange_fine.shape[0], 1), quantiles=[97.5]))[0].flatten()
+    # Calculate 1 and 3 sigma confidence lower limits on x
+    conf_lo1sig = (m.predict_quantiles(xRange_fine.reshape(xRange_fine.shape[0], 1), quantiles=[50-34.13]))[0].flatten()
+    conf_lo2sig = (m.predict_quantiles(xRange_fine.reshape(xRange_fine.shape[0], 1), quantiles=[50-47.72]))[0].flatten()
+    conf_lo3sig = (m.predict_quantiles(xRange_fine.reshape(xRange_fine.shape[0], 1), quantiles=[50-49.87]))[0].flatten()
+
+    # Calculate the uncertainty in the peak X position based on the spread in
+    # model function Y values within some N sigma of the max likelihood X position.
+    whPeak = np.argmax(medians)
+    xPeak = xRange_fine[whPeak]
+    # yPeak = medians[whPeak]
+    peak_lo3sig = conf_lo3sig[whPeak]
+    xAbove_lo3sig = xRange_fine[np.where(medians > peak_lo3sig)]
+    xErr_lo = np.nanmin(xAbove_lo3sig)
+    xErr_up = np.nanmax(xAbove_lo3sig)
+
+    # print(xErr_lo, xPeak, xErr_up)
+
+# OFF!!
+    # # Alternative method to estimate uncertainty on peak X position, using the
+    # # spread in the peak's X position among all GP samples returned.
+    # # BUT this seems to produce unbelievable low uncertainties in some (many?)
+    # # fits.
+    # # Get peaks of all the samples
+    # xPeakSamples = []
+    # for ii in range(samples.shape[1]):
+    #     whPeak = np.argmax(samples[:, ii])
+    #     xPeakSamples.append(xRange_fine[whPeak])
     
-    # Get peaks of all the samples
-    xPeakSamples = []
-    for ii in range(samples.shape[1]):
-        whPeak = np.argmax(samples[:, ii])
-        xPeakSamples.append(xRange_fine[whPeak])
+    # std_xPeakSamples = np.std(xPeakSamples)
+    # print("Sample peak sigma = ", std_xPeakSamples)
     
-    std_xPeakSamples = np.std(xPeakSamples)
-    print("Sample peak sigma = ", std_xPeakSamples)
-    
-    xErr_lo = std_xPeakSamples
-    xErr_up = std_xPeakSamples
+    # xErr_lo = std_xPeakSamples
+    # xErr_up = std_xPeakSamples
     
     # figOpt = m.plot()
     # # figOpt = m.plot_latent()
@@ -2018,12 +2048,11 @@ def fit_gp_1d(yy, xx, indMinMax=None, err=None):
     #     plt.draw()
         
     #     pdb.set_trace()
-    
+
     if snr_bf_peak < 3:
         xPeak = np.nan
         print(f"Low SNR {snr_bf_peak:.2f} measurement set to NaN")
-    # pdb.set_trace()
-    
+
     return xPeak, xErr_lo, xErr_up, snr_bf_peak
 
 
@@ -2051,7 +2080,6 @@ def measure_radial_profile_fits(fp, pa=None, height=None, rMax=250.,
     yRange: list of ymin and ymax values for the Y axis.
     """
     from astropy import table
-    from hst_process.utils import make_radii, make_phi, load_info, weighted_mean_1d
     
     hdu = fits.open(os.path.expanduser(fp))
     data = hdu[0].data
@@ -2063,7 +2091,7 @@ def measure_radial_profile_fits(fp, pa=None, height=None, rMax=250.,
     
     # Convert input PA (deg) to PA in phi coordinate system (radians).
     if pa is None:
-        info, infoPath = load_info(os.path.split(fp)[0] + '/../')
+        info, infoPath = load_info_json(os.path.split(fp)[0] + '/../')
         pa = info.get('diskPA_deg')
         if pa is None:
             print("FAILED: no disk PA found in info.json or given as input")
@@ -2152,8 +2180,6 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
         measure the profile value at each radius, used to define paHW if no
         paHW value is given as input.
     """
-    
-    from hst_process.utils import make_radii, make_phi, load_info, weighted_mean_1d
     
     radii = make_radii(data, star)
     phi = make_phi(data, star)
@@ -2376,7 +2402,6 @@ def plot_radprofs(tablePaths, yRange=None):
 
 
 def plot_highpass_filter(filepath, highpassSize=30., gaussian=False, save=False):
-    from hst_process.utils import unsharp
     
     hdu = fits.open(filepath)
         
