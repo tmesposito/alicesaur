@@ -22,11 +22,12 @@ import matplotlib.pyplot as plt
 
 # Internal imports
 from alicesaur.utils import *
-from alicesaur.plot.hst_disk_plot import measure_radial_profile
+from alicesaur.plot.disk_plot import measure_radial_profile
 
 
 def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
-                             rMax=180, interpInf=True, expandHW_r=False, expandHW=None):
+                             rMax=180, interpInf=True, expandHW_r=False,
+                             expandHW=None):
     """
     paList: list, position angles east of +y axis in [degrees].
     paHW: half-width of PA wedge to include on either side of pa [deg].
@@ -110,9 +111,17 @@ def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
 
 
 def dither_image(im, star, ditherPos):
-    
+    """
+    Shift an image by interpolation; primarily within a dither pattern.
+
+    Parameters
+    ----------
+    ditherPos: array
+        [dy, dx] shifts of the image center.
+    """
+
     imDithered = shift(im, ditherPos, order=1, cval=0.)
-    
+
     return imDithered
 
 
@@ -209,7 +218,7 @@ def dither_subtract_psf(sci, ref, refStar, shift=0.01, nIm=0):
     else:
         bestDither = np.array([0,0])
         bestRef = ref
-    
+
     return bestDither, bestRef
 
 
@@ -247,23 +256,24 @@ def dither_residuals(ps, sci, ref, refMask, refStar):
     print(f"\nOriginal chi^2  = {chi2_orig:.2f}")
     print(f"Iteration chi^2 = {chi2:.2f}  (dither: {pos})\n")
 
-    # plt.figure(1)
-    # plt.clf()
-    # plt.title(f'Original chi2={chi2_orig:.2f}')
-    # plt.imshow((sci - ref)[int(refStar[0]-150):int(refStar[0]+150),
-    #                        int(refStar[1]-150):int(refStar[1]+150)],
-    #            vmin=-1, vmax=1)
-    # plt.draw()
+# # TEMP!!!
+#     plt.figure(1)
+#     plt.clf()
+#     plt.title(f'Original chi2={chi2_orig:.2f}')
+#     plt.imshow((sci - ref)[int(refStar[0]-150):int(refStar[0]+150),
+#                             int(refStar[1]-150):int(refStar[1]+150)],
+#                 vmin=-1, vmax=1)
+#     plt.draw()
 
-    # plt.figure(2)
-    # plt.clf()
-    # plt.title(f'Dither ({pos[0]:.4f}, {pos[1]:.4f}) chi2={chi2:.2f}')
-    # plt.imshow(res[int(refStar[0]-150):int(refStar[0]+150),
-    #                int(refStar[1]-150):int(refStar[1]+150)],
-    #             vmin=-1, vmax=1)
-    # plt.draw()
+#     plt.figure(2)
+#     plt.clf()
+#     plt.title(f'Dither ({pos[0]:.4f}, {pos[1]:.4f}) chi2={chi2:.2f}')
+#     plt.imshow(res[int(refStar[0]-150):int(refStar[0]+150),
+#                     int(refStar[1]-150):int(refStar[1]+150)],
+#                 vmin=-1, vmax=1)
+#     plt.draw()
     
-    # pdb.set_trace()
+#     pdb.set_trace()
     
     return np.extract(~np.isnan(res), res)
 
@@ -379,6 +389,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
         for ii in range(len(sciImgs)):
             img = sciImgs[ii].copy()
             img[sciMasks[ii]] = np.nan
+            sciStar = sciStars[ii]
             # weightMap = get_ann_stdmap(img, sciStars[ii], radii, r_max=rmax+3,
             #                            use_median=True)
             # weightMap *= radii
@@ -398,9 +409,8 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
             else:
                 k = 0 # degree of polynomial
                 yy, xx = np.mgrid[:img.shape[0], :img.shape[1]]
-                yy = yy - sciStars[ii][0]
-                xx = xx - sciStars[ii][1]
-                # rr = make_radii(img, sciStars[ii])
+                yy = yy - sciStar[0]
+                xx = xx - sciStar[1]
                 rho = radii.copy()
                 rho[radii > 100] = np.nan
                 rho /= np.nanmax(rho)
@@ -415,7 +425,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                 # pf = leastsq(residuals_poly, p0, args=(img, refImgMasked, yy, xx, k))
                 if k > 0:
                     rads, prof, profOpp, paPeak, paOppPeak = measure_radial_profile(img - (10**pf[0][0])*refImgMasked,
-                                                star=sciStars[ii], pa=-30.,
+                                                star=sciStar, pa=-30.,
                                                 height=None)
                     # Clean the profiles of high outliers.
                     prof = np.array(prof)
@@ -484,7 +494,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
 
                     p0_dither = np.array([0.1, 0.1])
                     pf_dither = leastsq(dither_residuals, p0_dither,
-                                 args=(img, refImgs[0],
+                                 args=(img, (10**pf[0][0])*refImgs[0].copy(),
                                        refMasks[0], np.array([1024., 1024.])),
                                  full_output=1, factor=1, epsfcn=0.1)
                     bestDither = np.array([pf_dither[0][0], pf_dither[0][1]])
@@ -524,7 +534,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     # # breakpoint()
             # Optionally subtract the distant background again.
             if bgCen is not None:
-                bgCenRot = rotate_yx(bgCen, sciStars[ii], orientats[ii])
+                bgCenRot = rotate_yx(bgCen, sciStar, orientats[ii])
                 subImg, bg = subtract_bg(subImg, bgCenRot, bgRadius)
             # plt.figure(10)
             # plt.clf()
@@ -536,7 +546,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                 subImgMasked = subImg.copy()
                 if radProfMasks is not None:
                     subImgMasked[radProfMasks[ii]] = np.nan
-                meanRadProf = measure_mean_radial_prof(subImgMasked, sciStars[ii],
+                meanRadProf = measure_mean_radial_prof(subImgMasked, sciStar,
                                                        paList=radProfPaList - orientats[ii],
                                                        paHW=radProfPaHW, rMax=radProfMax,
                                                        interpInf=True)
@@ -681,7 +691,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
 
             # Optionally subtract the distant background again.
             if bgCen is not None:
-                bgCenRot = rotate_yx(bgCen, sciStars[ii], orientats[ii])
+                bgCenRot = rotate_yx(bgCen, sciStar, orientats[ii])
                 subImg, bg = subtract_bg(subImg, bgCenRot, bgRadius)
             # Measure and subtract a radial profile from the
             # PSF-subtracted individual image.
@@ -689,7 +699,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                 subImgMasked = subImg.copy()
                 if radProfMasks is not None:
                     subImgMasked[radProfMasks[ii]] = np.nan
-                meanRadProf = measure_mean_radial_prof(subImgMasked, sciStars[ii],
+                meanRadProf = measure_mean_radial_prof(subImgMasked, sciStar,
                                                        paList=radProfPaList - orientats[ii],
                                                        paHW=radProfPaHW, rMax=radProfMax)
                                                        # paList=np.arange(170., 271., 5.) - orientats[ii])
