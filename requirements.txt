@@ -1,4 +1,12 @@
 numpy
+matplotlib
 scipy
 astropy
-matplotlib
+corner
+emcee
+Gpy
+hickle
+ipython
+lmfit
+pyklip
+tqdm

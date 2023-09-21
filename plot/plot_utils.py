@@ -14,7 +14,6 @@ from astropy import table
 from astropy import wcs
 from scipy.ndimage import gaussian_filter
 from matplotlib.colors import SymLogNorm, LogNorm
-from hst_process.utils import make_radii
 
 
 #---- DEFINE CONSTANTS ----#

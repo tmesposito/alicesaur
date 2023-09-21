@@ -3,22 +3,17 @@
 # Tom Esposito
 
 import os
-import sys
-import argparse
 import pdb
+import ctypes
 import numpy as np
 from numpy.polynomial.polynomial import polyval2d
-import json
-import ctypes
-from glob import glob
-from tqdm import tqdm
-from astropy.io import ascii, fits
-from astropy import table
+import matplotlib.pyplot as plt
+from astropy.io import fits
 from astropy import wcs
-from scipy.ndimage import gaussian_filter, shift, filters, map_coordinates
+from scipy.ndimage import gaussian_filter, shift, filters
 from scipy.interpolate import interp1d
 from scipy.optimize import leastsq
-import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 # Internal imports
 from alicesaur.utils import *

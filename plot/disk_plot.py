@@ -3,23 +3,29 @@
 # Tom Esposito
 
 import os
-import sys
 import pdb
 import copy
 import numpy as np
 import matplotlib.pyplot as plt
-from glob import glob
 from astropy.io import ascii, fits
 from astropy import table
-from astropy import wcs
-from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
-from scipy.interpolate import interp2d
+from lmfit import Model
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter, median_filter, shift, zoom
+from scipy.signal import correlate
+from scipy.optimize import curve_fit
 from matplotlib.colors import SymLogNorm, LogNorm
+from matplotlib import cm, patches
+import GPy
 
 # Internal imports
 from alicesaur.utils import make_radii, make_phi, make_1d_gauss, make_double_1d_gauss, unsharp, load_info_json, weighted_mean_1d
 from .plot_utils import *
 from alicesaur.calibration.flux import convert_intensity
+
+# FIX ME!!! Remove these dependencies on private packages.
+from gpi_python.gpidisks1 import axMaker
+from stis_disk_gallery_plot import det_fns
 
 
 #---- DEFINE CONSTANTS ----#
@@ -28,7 +34,6 @@ pscale_stis = 0.0507 # [arcsec/pixel]
 
 def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
                        vmax_stis=None, vmax_gpi=None, makeColorbar=False):
-    from gpi_python.gpidisks1 import axMaker
 
     # targList = ['HD 117214', 'HD 129590']
 
@@ -192,9 +197,6 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
     makeColorbar: bool, True to draw colorbars for all columns.
     save: bool, True to save the figure to file.
     """
-    from matplotlib import cm, patches
-    from scipy.ndimage import shift, zoom
-    from stis_disk_gallery_plot import det_fns
 
     pscale_gpi = 0.014166 # [arcsec/pix]
 
@@ -719,9 +721,6 @@ def plot_stis_gpi_overlay(targName=None, stis_paths=None, gpi_path=None,
         with 2 arcsec of view in +/-Y directions and 1.5/1.0 arcsec view in +/-X
         directions from the cen of each image.
     """
-    # from scipy.ndimage.interpolation import zoom
-    from scipy.ndimage import shift, zoom
-    from stis_disk_gallery_plot import det_fns
 
     pscale_gpi = 0.014166 # [arcsec/pix]
 
@@ -809,7 +808,6 @@ def plot_stis_gpi_overlay(targName=None, stis_paths=None, gpi_path=None,
                 norm=SymLogNorm(linthresh=0.1, linscale=1., vmin=vmin_stis, vmax=vmax_stis))
                 # extent=[roi[1][0], roi[1][1],
                 #       roi[0][0], roi[0][1]])
-    from matplotlib import cm
     # norm = cm.colors.Normalize(vmax=abs(Z).max(), vmin=-abs(Z).max())
     # cmap = cm.PRGn
     
@@ -847,8 +845,6 @@ def plot_all_overlays(stis_type='bar', smooth=True):
     """
     stis_type: 'bar' or 'wedge'
     """
-    from gpi_python.gpidisks1 import det_fns
-    from stis_disk_gallery_plot import det_fns as stis_fns
     
     
     
@@ -856,18 +852,18 @@ def plot_all_overlays(stis_type='bar', smooth=True):
                  'HD 115600', 'HD 117214', 'HD 129590', 'HD 145560', 'HD 146897']
     # targNames = ['HD 145560']
     
-    # plot_stis_gpi_overlay('HD 106906', stis_paths=stis_fns['HD 106906']['wedge'],
+    # plot_stis_gpi_overlay('HD 106906', stis_paths=det_fns['HD 106906']['wedge'],
     #                         gpi_path=det_fns['HD 106906']['rstokes'],
     #                         roi=[(-6, 6),(-6, 6)], smooth=smooth)
     
     for targ in targNames:
         savePath = '/Users/Tom/Research/data/hst/figures/{}_{}_gpi_contours.png'.format(targ, stis_type)
-        plot_stis_gpi_overlay(targ, stis_paths=stis_fns[targ][stis_type],
+        plot_stis_gpi_overlay(targ, stis_paths=det_fns[targ][stis_type],
                               gpi_path=det_fns[targ]['rstokes'],
                               roi=[(-6, 6),(-6, 6)], smooth=smooth,
                               savePath=savePath)
         # print(targ, det_fns[targ]['rstokes'])
-        # print(targ, stis_fns[targ][stis_type])
+        # print(targ, det_fns[targ][stis_type])
     #   # breakpoint()
     
     return
@@ -908,8 +904,6 @@ def vertical_profile(fp, rad=60, highpass=None, diskPA=None, star=None,
     diskPA: disk major axis PA in [degrees]
     maxDiskWidth_pix: maximum "vertical" width of the disk in [pixels]
     """
-    from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
-    from scipy.interpolate import interp2d
     
     if (data is None) | (hdr is None) | (hdu is None):
         with fits.open(os.path.expanduser(fp)) as hduf:
@@ -1209,8 +1203,6 @@ def vertical_profile_gp(fp, rad=60, highpass=None, diskPA=None, star=None,
       diskPA: disk major axis PA in [degrees]
       maxDiskWidth_pix: maximum "vertical" width of the disk in [pixels]
     """
-    from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
-    from scipy.interpolate import interp2d
     
     # DEFINE some data cleaning and fitting parameters.
     dr = 0.5 # half-width of each slice in [pix]
@@ -1419,8 +1411,6 @@ def vertical_profile_y(fp, rad=60, highpass=None, diskPA=None, star=None,
       diskPA: disk major axis PA in [degrees]
       maxDiskWidth_pix: maximum "vertical" width of the disk in [pixels]
     """
-    from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter
-    from scipy.interpolate import interp2d
     
     if (data is None) | (hdr is None) | (hdu is None):
         with fits.open(os.path.expanduser(fp)) as hduf:
@@ -1790,7 +1780,7 @@ def vertical_profile_y_gp(fp, rad=60, highpass=None, diskPA=None, star=None,
 
 
 def crosscorr_gauss_1d(yy, xx):
-    from scipy.signal import correlate
+
     
     # matTemplate = np.zeros(len(xx)*2)
     # mat = np.zeros(len(xx)*2)
@@ -1809,7 +1799,6 @@ def crosscorr_gauss_1d(yy, xx):
 
 
 def fit_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None):
-    from scipy.optimize import curve_fit
     
     if indMinMax is not None:
         yyFit = yy[indMinMax[0]:indMinMax[1]]
@@ -1830,10 +1819,7 @@ def fit_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None):
 
 
 def fit_double_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None, err=None):
-    # from scipy.optimize import curve_fit
-    from lmfit import Model
-    from scipy.interpolate import interp1d
-    
+
     if indMinMax is not None:
         yyFitOrig = yy[indMinMax[0]:indMinMax[1]]
         xxFitOrig = xx[indMinMax[0]:indMinMax[1]]
@@ -1919,10 +1905,7 @@ def fit_gp_1d(yy, xx, indMinMax=None, err=None):
     None.
 
     """
-    
-    import GPy
-    from IPython.display import display
-    import plotly.io as pio
+
     GPy.plotting.change_plotting_library('plotly')
     
     X = xx[indMinMax[0]:indMinMax[1]].reshape(len(xx[indMinMax[0]:indMinMax[1]]), 1)
@@ -2079,7 +2062,6 @@ def measure_radial_profile_fits(fp, pa=None, height=None, rMax=250.,
     rMax: float, maximum radius in [pixels] to which profile gets measured.
     yRange: list of ymin and ymax values for the Y axis.
     """
-    from astropy import table
     
     hdu = fits.open(os.path.expanduser(fp))
     data = hdu[0].data
@@ -2315,7 +2297,6 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
 
 
 def plot_radprofs(tablePaths, yRange=None):
-    from astropy.io import ascii
     
     tabs = []
     for ii in tablePaths:

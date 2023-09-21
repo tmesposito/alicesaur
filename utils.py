@@ -3,11 +3,16 @@
 import os
 import pdb
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import SymLogNorm
 import json
 from glob import glob
-from astropy.io import ascii, fits
-from scipy.ndimage import gaussian_filter, median_filter
-from scipy.ndimage import filters, map_coordinates
+from astropy.io import fits
+from scipy.ndimage import gaussian_filter, median_filter, interpolation, filters, map_coordinates
+from emcee import EnsembleSampler
+from emcee.interruptible_pool import InterruptiblePool
+import hickle
+from corner import corner
 
 
 def make_radii(arr, cen):
@@ -89,9 +94,6 @@ def shift_im_center(im, old_cen, new_cen, fillval=0., size_out=None):
         im_sh: the shifted imaged as 2D numpy array.
     
     """
-    from scipy.ndimage import interpolation
-#    import matplotlib.pyplot as plt
-    
     
  # # FIX ME!!! Not implemented correctly. Supposed to handle trimming/padding of array
  # # simultaneously with the shift.
@@ -269,7 +271,6 @@ def make_spikemask_stis(img, ctr, angles, width=10.):
     angles= angles of spikes in [degrees].
     width= width of spike mask; 0 or no mask; int or flt [pix].
     """
-    import scipy.constants
 
     y,x = np.mgrid[:img.shape[0], :img.shape[1]]
 
@@ -319,8 +320,7 @@ def subtract_bg(im, cen, size):
         return im, bg
     
     imSub = im - bg
-    # import pdb
-    # import matplotlib.pyplot as plt
+
     # test = im.copy()
     # test[radii >= size] = 1e8
     # plt.figure(4)
@@ -380,8 +380,6 @@ def unsharp(ds, dataHDU, fl, B=30., ident='_999', output=True, silent=True,
     if parOK:
         try:
             # Parallelized filtering. Prefer this version.
-            from emcee.interruptible_pool import InterruptiblePool
-            
             # Default is to set number of processes to number of processors available.
             # No speed gain past the point where ~1 worker per processor (with more workers than
             # processors, the median filter just takes longer for each worker).
@@ -523,8 +521,6 @@ def gaussian_filter_img(im, B, ii=None, quarters=None):
 
 
 def combine_final_fits(fl):
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import SymLogNorm
 
     data = []
     hdrs = []
@@ -603,10 +599,6 @@ def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None
         String identifier for the current MCMC run, to be appended to filenames
         for tracking results.
     """
-    import matplotlib.pyplot as plt
-    from emcee import EnsembleSampler
-    import hickle
-    from corner import corner
 
     def mc_lnlike(pl, pkeys, priors, data, err, xx):
         
@@ -825,7 +817,6 @@ def get_ann_stdmap(im, cen, radii, r_max=None, mask_edges=False, use_mean=False,
         r_max = radii.max()
     
     if mask_edges:
-        from scipy.ndimage import gaussian_filter #median_filter
         cen = np.array(im.shape)//2
         mask = np.ma.masked_invalid(gaussian_filter(im, mask_edges)).mask
         mask[cen[0]-mask_edges*5:cen[0]+mask_edges*5, cen[1]-mask_edges*5:cen[1]+mask_edges*5] = False
