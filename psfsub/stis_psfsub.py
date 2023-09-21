@@ -579,6 +579,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
         refImgsMasked = refImgs.copy()
         for ii, rIm in enumerate(refImgsMasked):
             refImgsMasked[ii][refMasks[ii]] = np.nan
+            sciStar = sciStars[ii]
 # # TEMP!!! Subtracting mean radial profile first.
 #             refMeanRadProf = measure_mean_radial_prof(refImgsMasked[ii], np.array([1024, 1024]),
 #                                                       paList=np.array([0]),
