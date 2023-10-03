@@ -23,10 +23,6 @@ from alicesaur.utils import make_radii, make_phi, make_1d_gauss, make_double_1d_
 from .plot_utils import *
 from alicesaur.calibration.flux import convert_intensity
 
-# FIX ME!!! Remove these dependencies on private packages.
-from gpi_python.gpidisks1 import axMaker
-from stis_disk_gallery_plot import det_fns
-
 
 #---- DEFINE CONSTANTS ----#
 pscale_stis = 0.0507 # [arcsec/pixel]
@@ -860,18 +856,18 @@ def plot_all_overlays(stis_type='bar', smooth=True):
                  'HD 115600', 'HD 117214', 'HD 129590', 'HD 145560', 'HD 146897']
     # targNames = ['HD 145560']
     
-    # plot_stis_gpi_overlay('HD 106906', stis_paths=det_fns['HD 106906']['wedge'],
+    # plot_stis_gpi_overlay('HD 106906', stis_paths=stis_fns['HD 106906']['wedge'],
     #                         gpi_path=det_fns['HD 106906']['rstokes'],
     #                         roi=[(-6, 6),(-6, 6)], smooth=smooth)
     
     for targ in targNames:
         savePath = '/Users/Tom/Research/data/hst/figures/{}_{}_gpi_contours.png'.format(targ, stis_type)
-        plot_stis_gpi_overlay(targ, stis_paths=det_fns[targ][stis_type],
+        plot_stis_gpi_overlay(targ, stis_paths=stis_fns[targ][stis_type],
                               gpi_path=det_fns[targ]['rstokes'],
                               roi=[(-6, 6),(-6, 6)], smooth=smooth,
                               savePath=savePath)
         # print(targ, det_fns[targ]['rstokes'])
-        # print(targ, det_fns[targ][stis_type])
+        # print(targ, stis_fns[targ][stis_type])
     #   # breakpoint()
     
     return
