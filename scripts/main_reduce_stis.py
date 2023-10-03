@@ -35,11 +35,6 @@ if __name__ == "__main__":
                         default="", type=str, nargs='?',
                         help=desc)
 
-    desc = 'Background sampling patch center y x (e.g., 735 627)'
-    parser.add_argument('--bgCen', metavar='bgCen',
-                        default=None, type=str, nargs='*',
-                        help=desc)
-
     desc = 'Width in [pixels] of diffraction spike masks. Default is to use the value in the info.json.'
     parser.add_argument('--spWidth', metavar='spWidth',
                         default=None, type=int, nargs='?',

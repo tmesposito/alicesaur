@@ -7,15 +7,15 @@ import pdb
 import copy
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import cm, patches
+from matplotlib.colors import SymLogNorm
 from astropy.io import ascii, fits
 from astropy import table
-from lmfit import Model
-from scipy.interpolate import interp1d
-from scipy.ndimage import gaussian_filter, median_filter, shift, zoom
+from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter, shift, zoom
 from scipy.signal import correlate
 from scipy.optimize import curve_fit
-from matplotlib.colors import SymLogNorm, LogNorm
-from matplotlib import cm, patches
+from scipy.interpolate import interp1d
+from lmfit import Model
 import GPy
 
 # Internal imports
@@ -34,6 +34,8 @@ pscale_stis = 0.0507 # [arcsec/pixel]
 
 def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
                        vmax_stis=None, vmax_gpi=None, makeColorbar=False):
+# FIX ME!!! Remove this dependence on a private external package.
+    from gpi_python.gpidisks1 import axMaker
 
     # targList = ['HD 117214', 'HD 129590']
 
@@ -197,6 +199,9 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
     makeColorbar: bool, True to draw colorbars for all columns.
     save: bool, True to save the figure to file.
     """
+
+# FIX ME!!! Remove this dependence on a private external package.
+    from stis_disk_gallery_plot import det_fns
 
     pscale_gpi = 0.014166 # [arcsec/pix]
 
@@ -721,6 +726,8 @@ def plot_stis_gpi_overlay(targName=None, stis_paths=None, gpi_path=None,
         with 2 arcsec of view in +/-Y directions and 1.5/1.0 arcsec view in +/-X
         directions from the cen of each image.
     """
+# FIX ME!!! Remove this dependence on a private external package.
+    from stis_disk_gallery_plot import det_fns
 
     pscale_gpi = 0.014166 # [arcsec/pix]
 
@@ -845,8 +852,9 @@ def plot_all_overlays(stis_type='bar', smooth=True):
     """
     stis_type: 'bar' or 'wedge'
     """
-    
-    
+# FIX ME!!! Remove this dependence on private external packages.
+    from gpi_python.gpidisks1 import det_fns
+    from stis_disk_gallery_plot import det_fns as stis_fns
     
     targNames = ['AK Sco', 'HD 111161', 'HD 114082', 
                  'HD 115600', 'HD 117214', 'HD 129590', 'HD 145560', 'HD 146897']
@@ -1781,35 +1789,34 @@ def vertical_profile_y_gp(fp, rad=60, highpass=None, diskPA=None, star=None,
 
 def crosscorr_gauss_1d(yy, xx):
 
-    
     # matTemplate = np.zeros(len(xx)*2)
     # mat = np.zeros(len(xx)*2)
-    
+
     gaussTemplate = make_1d_gauss(xx, xx[len(xx)//2], 0.1)
     # matTemplate[:len(xx)] = gaussTemplate
     # mat[:len(xx)] = yy
     xcorr = correlate(gaussTemplate, yy, mode='full', method='direct')
-    
+
     plt.figure(80)
     plt.clf()
     plt.plot(xcorr) #[len(xx)//4:int((3/4)*len(xx))])
     plt.draw()
-    
+
     return xcorr
 
 
 def fit_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None):
-    
+
     if indMinMax is not None:
         yyFit = yy[indMinMax[0]:indMinMax[1]]
         xxFit = xx[indMinMax[0]:indMinMax[1]]
     else:
         yyFit = yy
         xxFit = xx
-    
+
     if p0 is None:
         p0 = (xxFit[len(xxFit)//2], 2., 10.)
-    
+
     if bounds is None:
         bounds=(np.array([0., 0., 1e-1]), np.array([730., 10., np.inf]))
 
@@ -1819,7 +1826,7 @@ def fit_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None):
 
 
 def fit_double_gauss_1d(yy, xx, indMinMax=None, p0=None, bounds=None, err=None):
-
+    
     if indMinMax is not None:
         yyFitOrig = yy[indMinMax[0]:indMinMax[1]]
         xxFitOrig = xx[indMinMax[0]:indMinMax[1]]
@@ -1905,7 +1912,6 @@ def fit_gp_1d(yy, xx, indMinMax=None, err=None):
     None.
 
     """
-
     GPy.plotting.change_plotting_library('plotly')
     
     X = xx[indMinMax[0]:indMinMax[1]].reshape(len(xx[indMinMax[0]:indMinMax[1]]), 1)
