@@ -17,6 +17,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.interpolate import interp1d
 
 # Internal imports
+import alicesaur
 from alicesaur.psfsub import stis_psfsub
 from alicesaur import utils
 from alicesaur.calibration.bad_pix import fix_bad_pix
@@ -30,9 +31,20 @@ class Pipeline(object):
     Base reduction pipeline class for Hubble Space Telescope image processing.
     """
 
-    # Image pixel scale. Default to STIS value.
-    pscale = 0.0507 # [arcsec/pixel]
     debug = False
+    # Locate the path to the alicesaur package. Prioritize the user environment
+    # variable ALICESAUR_HOME over retrieving the path from imported modules.
+    if os.environ.get('ALICESAUR_HOME') not in [None, '']:
+        packageHome = os.path.abspath(os.environ.get('ALICESAUR_HOME'))
+    else:
+        packageHome = os.path.abspath(alicesaur.__path__[0])
+
+    # Default to STIS instrument.
+    instrument = 'stis'
+    # Image plate scale.
+    pscale = 0.0507 # [arcsec/pixel]
+    occultMaskPath = os.path.join(packageHome, 'masks',
+                                  'mask_stis_occulters_sx2_bar_wedgeB.fits')
 
     def __init__(self, **kwargs):
 
@@ -440,14 +452,15 @@ class Pipeline(object):
             pass
 
         # Mask out occulting wedges (later replacing with NaN values).
-    # TEMP!!! Hardcoded for distortion corrected images only right now.
-        if 'bar' in obsMode:
-            occultMask = fits.getdata('/Users/Tom/Research/data/hst/masks/stis/mask_distorcorr_loci2_bar.fits')
+        if self.instrument == 'stis':
+            occultMask = fits.getdata(self.occultMaskPath)
         else:
-            occultMask = fits.getdata('/Users/Tom/Research/data/hst/masks/stis/mask_distorcorr_sx2_bar.fits')
+            print("***HELP!!! Occulter masks are not implemented yet for "\
+                  "instruments other than STIS")
+            occultMask = np.zeros(orbitImgs[0].shape)
         occultMask[occultMask < 0] = -1.e4
-    
-    
+
+
     # ==== ALIGN IMAGES TO COMMON STAR POSITION ==== #
     
         # Find star.
