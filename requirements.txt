@@ -8,5 +8,6 @@ Gpy
 hickle
 ipython
 lmfit
+plotly
 pyklip
 tqdm
