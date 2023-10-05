@@ -102,7 +102,7 @@ def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
     # 
     # pdb.set_trace()
 
-    return radProf2d_smooth #radProf2d #
+    return radProf2d_smooth
 
 
 def dither_image(im, star, ditherPos):
@@ -217,7 +217,7 @@ def dither_subtract_psf(sci, ref, refStar, shift=0.01, nIm=0):
     return bestDither, bestRef
 
 
-def dither_residuals(ps, sci, ref, refMask, refStar):
+def dither_residuals(ps, sci, ref, refMask, refStar, verbose=False):
     """
     Parameters
     ----------
@@ -248,8 +248,9 @@ def dither_residuals(ps, sci, ref, refMask, refStar):
     res = sci - refDitheredMasked
     chi2 = np.nansum(res**2)
 
-    print(f"\nOriginal chi^2  = {chi2_orig:.2f}")
-    print(f"Iteration chi^2 = {chi2:.2f}  (dither: {pos})\n")
+    if verbose:
+        print(f"\nOriginal chi^2  = {chi2_orig:.2f}")
+        print(f"Iteration chi^2 = {chi2:.2f}  (dither: {pos})\n")
 
 # # TEMP!!!
 #     plt.figure(1)
@@ -286,35 +287,8 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
     def residuals_multi_ref(ps, sci, refs, weightMap=1.):
         weights = 10**ps
         resMasked = weightMap*(sci - np.sum((weights.transpose()*refs.transpose()).transpose(), axis=0))
-        
-        # plt.figure(12)
-        # plt.clf()
-        # plt.imshow(sci, vmin=-1., vmax=1.)
-        # plt.figure(13)
-        # plt.clf()
-        # plt.imshow(sci - np.sum((weights.transpose()*refs.transpose()).transpose(), axis=0), vmin=-1., vmax=1.)
-        # plt.draw()
-        # plt.figure(15)
-        # plt.clf()
-        # plt.imshow(weightMap*(sci - np.sum((weights.transpose()*refs.transpose()).transpose(), axis=0)), vmin=-1., vmax=1.)
-        # plt.draw()
-        
-        res = np.extract(~np.isnan(resMasked), resMasked)
-        # print(weights)
-        # print(np.sum(res**2))
-        # p5 = np.percentile(res, 5)
-        # p99 = np.percentile(res, 99)
-        # print(p5)
-        # print(p99)
-        # print(np.sum(res[(res >= p5) & (res <= p95)]**2))
-        # print(np.sum(res[res <= p99]**2))
-        # pdb.set_trace()
-        # return np.nan_to_num((sci - np.sum((weights.transpose()*refs.transpose()).transpose(), axis=0))/weightMap, 0.).flatten()
 
-        # print(ps)
-        # print(np.sum(res**2))
-        
-        # pdb.set_trace()
+        res = np.extract(~np.isnan(resMasked), resMasked)
 
         # !!!! IMPORTANT NOTE !!! leastsq takes the 1st order residuals (data - model),
         # and NOT the 2nd order residuals ( (data - model)**2 ).
@@ -323,28 +297,31 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
         # Try to ignore bright residuals from bg stars.
         # return res[(res >= p5) & (res <= p95)]
         # return res[res <= p99]
-    
-    def residuals(ps, sci, ref, weightMap=1.):
-        # print(ps[0], np.sum(np.nan_to_num(sci - (10**ps[0])*ref, 0.).flatten()**2))
-        # plt.figure(12)
-        # plt.clf()
-        # plt.imshow(sci, vmin=-1., vmax=1000.)
-        # plt.title("'sci' = Science image")
-        # plt.figure(13)
-        # plt.clf()
-        # plt.imshow(ref, vmin=-1., vmax=1000.)
-        # plt.title("'ref' = input Reference image")
-        # plt.figure(14)
-        # plt.clf()
-        # plt.imshow(sci - (10**ps[0])*ref, vmin=-1., vmax=10.)
-        # plt.draw()
-        # plt.title("Residuals = 'sci' - scaled 'ref'")
-        # plt.figure(15)
-        # plt.clf()
-        # plt.imshow((sci - (10**ps[0])*ref)/weightMap, vmin=-1., vmax=10.)
-        # plt.draw()
-        # plt.title("Weighted Residuals = ('sci' - scaled 'ref')/weights")
-        # pdb.set_trace()
+
+    def residuals(ps, sci, ref, weightMap=1., debug=False):
+        if debug:
+            print(ps[0],
+                  np.sum(np.nan_to_num(sci - (10**ps[0])*ref, 0.).flatten()**2))
+            plt.figure(12)
+            plt.clf()
+            plt.imshow(sci, vmin=-1., vmax=1000.)
+            plt.title("'sci' = Science image")
+            plt.figure(13)
+            plt.clf()
+            plt.imshow(ref, vmin=-1., vmax=1000.)
+            plt.title("'ref' = input Reference image")
+            plt.figure(14)
+            plt.clf()
+            plt.imshow(sci - (10**ps[0])*ref, vmin=-1., vmax=10.)
+            plt.draw()
+            plt.title("Residuals = 'sci' - scaled 'ref'")
+            plt.figure(15)
+            plt.clf()
+            plt.imshow((sci - (10**ps[0])*ref)/weightMap, vmin=-1., vmax=10.)
+            plt.draw()
+            plt.title("Weighted Residuals = ('sci' - scaled 'ref')/weights")
+            pdb.set_trace()
+
         return np.nan_to_num((sci - (10**ps[0])*ref)*weightMap, 0.).flatten()
     
     def residuals_poly(ps, sci, ref, yy, xx, rr, k):
@@ -411,9 +388,6 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                 rho /= np.nanmax(rho)
                 c0 = np.array([1., -1., 2., -2.])
                 # c0 = np.zeros((k+1, k+1))
-   #              c0 = np.array([4.63185962e-02,  1.90126718e-05, -1.19575972e-07,
-   # -7.18153512e-05, -3.96741472e-07,  1.04905367e-09, -6.99563155e-08,
-   #  4.71184550e-10, -8.59634685e-13]).reshape((k+1, k+1))
                 # p0 = np.append(np.array([0.]), c0.flatten())
                 pf = leastsq(residuals, p0, args=(img, refImgMasked, weightMap),
                              full_output=1, factor=1, epsfcn=0.01)
@@ -444,7 +418,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     plt.plot(rads, p1prof, 'c--')
                     plt.plot(rads, p1profOpp, 'm--')
                     plt.draw()
-                    breakpoint()
+
                     poly_out = leastsq(residuals_poly, c0.flatten(),
                                  args=(img - (10**pf[0][0])*refImgMasked, refImgMasked, yy, xx, rho, k),
                                  epsfcn=0.01,
@@ -459,42 +433,20 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     # polybf = polyval2d(xx, yy, cf)
                     polybf = pfpoly[0]*(pfpoly[1]*rho**4 - pfpoly[2]*rho**2 + pfpoly[3]) # spherical Zernike
                     subImg = sciImgs[ii] - (10**pf[0][0])*refImgMasked - polybf
-                    # subImgs.append(sciImgs[ii] - (10**pf[0][0])*refImgMasked - polybf)
                     print(pfpoly)
                 else:
                     subImg = sciImgs[ii] - (10**pf[0])*refImgMasked
                     refScaleFactors.append(10**pf[0][0])
-                    # plt.figure(12)
-                    # plt.clf()
-                    # plt.imshow(subImg, vmin=0., vmax=1.)
-                    # plt.figure(13)
-                    # plt.clf()
-                    # plt.imshow(refImgMasked, vmin=-1., vmax=10.)
-
-                    # plt.draw()
-
-
- # TEMP TESTING!!! Dither reference image location to optimize chi^2.
-                    # bestDither, bestRef = dither_subtract_psf(img,
-                    #                                           ref=(10**pf[0][0])*refImgMasked,
-                    #                                           refStar=np.array([1024., 1024.]),
-                    #                                           shift=0.01, nIm=ii)
-                    # # Replace the previous best subtraction with the better one.
-                    # if not np.all(bestDither == np.array([0,0])):
-                    #     ditheredRef = dither_image((10**pf[0][0])*refImgMasked,
-                    #                                star=np.array([1024., 1024.]),
-                    #                                ditherPos=bestDither)
-                    #     subImg = sciImgs[ii] - ditheredRef
-                    #     print(f"Updated PSF subtraction with best dither {bestDither}")
 
                     p0_dither = np.array([0.1, 0.1])
                     pf_dither = leastsq(dither_residuals, p0_dither,
                                  args=(img, (10**pf[0][0])*refImgs[0].copy(),
-                                       refMasks[0], np.array([1024., 1024.])),
+                                       refMasks[0], np.array([1024., 1024.]),
+                                       True),
                                  full_output=1, factor=1, epsfcn=0.1)
                     bestDither = np.array([pf_dither[0][0], pf_dither[0][1]])
 
-                    # Replace the previous best subtraction with the better one.
+                    # Replace the previous best subtraction with the better one
                     if not np.all(bestDither == np.array([0,0])):
                         ditheredRef = dither_image((10**pf[0][0])*refImgs[0],
                                                    star=np.array([1024., 1024.]),
@@ -502,39 +454,13 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                         ditheredRefMasked = ditheredRef.copy()
                         ditheredRefMasked[refMasks[0]] = np.nan
                         subImg = sciImgs[ii] - ditheredRefMasked
-                        print(f"Updated PSF subtraction with best dither {bestDither}")
- # END TESTING TEMP!!!
+                        print(f"Updated PSF subtraction with best dither "\
+                              f"{bestDither}")
 
-                    # pdb.set_trace()
-                    # # Optionally subtract the distant background again.
-                    # if bgCen is not None:
-                    #     bgCenRot = rotate_yx(bgCen, sciStars[ii], orientats[ii])
-                    #     subImg, bg = subtract_bg(subImg, bgCenRot, bgRadius)
-                    # # Measure and subtract a radial profile from the
-                    # # PSF-subtracted individual image.
-                    # subImgMasked = subImg.copy()
-                    # if radProfMasks is not None:
-                    #     subImgMasked[radProfMasks[ii]] = np.nan
-                    # meanRadProf = measure_mean_radial_prof(subImgMasked, sciStars[ii],
-                    #                                        paList=radProfPaList - orientats[ii],
-                    #                                        paHW=radProfPaHW, rMax=radProfMax)
-                    #                                        # paList=np.arange(170., 271., 5.) - orientats[ii])
-                    #                                        # paList=np.append(np.arange(20., 31., 5.), np.arange(170., 271., 5.)) - orientats[ii])
-                    # subImgs.append(subImg - meanRadProf)
-                    # # subImgs.append(subImg)
-                    # # plt.figure(13)
-                    # # plt.clf()
-                    # # plt.imshow(subImg - meanRadProf, vmin=-1., vmax=10.)
-                    # # plt.draw()
-                    # # breakpoint()
             # Optionally subtract the distant background again.
             if bgCen is not None:
                 bgCenRot = rotate_yx(bgCen, sciStar, orientats[ii])
                 subImg, bg = subtract_bg(subImg, bgCenRot, bgRadius)
-            # plt.figure(10)
-            # plt.clf()
-            # plt.imshow(subImg)
-            # plt.draw()
             # Measure and subtract a radial profile from the
             # PSF-subtracted individual image.
             if subRadProf:
@@ -547,11 +473,6 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                                                        interpInf=True)
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 subImgs.append(subImg - meanRadProf)
-                # plt.figure(11)
-                # plt.clf()
-                # plt.imshow(subImg - meanRadProf)
-                # plt.draw()
-                # pdb.set_trace()
             else:
                 subImgs.append(subImg)
                 meanRadProf = 0
@@ -579,28 +500,15 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
         refImgsMasked = refImgs.copy()
         for ii, rIm in enumerate(refImgsMasked):
             refImgsMasked[ii][refMasks[ii]] = np.nan
-            sciStar = sciStars[ii]
-# # TEMP!!! Subtracting mean radial profile first.
-#             refMeanRadProf = measure_mean_radial_prof(refImgsMasked[ii], np.array([1024, 1024]),
-#                                                       paList=np.array([0]),
-#                                                       paHW=180, rMax=radProfMax,
-#                                                       interpInf=True)
-#             refImgsMasked[ii] -= refMeanRadProf
-#  # END TEMP!!! Mean radial profile sub.
+        # Do the PSF subtraction on each science image.
         for ii in tqdm(range(len(sciImgs))):
             img = sciImgs[ii].copy()
             img[sciMasks[ii]] = np.nan
+            sciStar = sciStars[ii]
             # weightMap = get_ann_stdmap(img, sciStars[ii].astype(int), radii,
             #                            r_max=rmax+3, use_median=True)
             # weightMap *= radii
             weightMap = 1.
-# # TEMP!!! Subtracting mean radial profile first.
-#             sciMeanRadProf = measure_mean_radial_prof(img, sciStars[ii],
-#                                                       paList=np.array([0]),
-#                                                       paHW=180, rMax=radProfMax,
-#                                                       interpInf=True)
-#             img -= sciMeanRadProf
-#  # END TEMP!!! Mean radial profile sub.
             # For annular subsections.
  # FIX ME!!! Multiple annuli not tested for multi refs.
             if ann > 1:
@@ -618,58 +526,23 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
             # For full image (no subsection) subtraction.
             else:
                 k = 0 # degree of polynomial
-                pf = leastsq(residuals_multi_ref, p0, args=(img, refImgsMasked, weightMap),
+                pf = leastsq(residuals_multi_ref, p0, args=(img,
+                                                    refImgsMasked, weightMap),
                               full_output=1, factor=1, epsfcn=0.1)
-# # TEMP BELOW!!!! TESTING FOR 106906
-                # print("\n***** WARNING ***** Force in PSF ref scaling coefficient of 0.246\n")
-                # pf = np.array([[np.log10(0.246)]])
                 if k > 0:
-                    print("\nHELP!!! Poly fit not implemented for multiple ref images. Sorry!\n")
+                    print("\n***HELP!!! Poly fit not implemented for "\
+                          "multiple ref images. Sorry!\n")
                     pass
                 else:
                     subImg = sciImgs[ii] - np.sum(((10**pf[0].transpose())*refImgsMasked.transpose()).transpose(), axis=0)
-# # TEMP!!! TESTING subtraction of mean radial profile first.
-#                     subImg = (sciImgs[ii] - sciMeanRadProf) - np.sum(((10**pf[0].transpose())*refImgsMasked.transpose()).transpose(), axis=0)
-# # END TEMP!!! TESTING subtraction of mean radial profile first.
                     refScaleFactors.append(10**pf[0])
-                    # plt.figure(12)
-                    # plt.clf()
-                    # plt.imshow(subImg, vmin=0., vmax=1.)
-                    # plt.draw()
-                    # pdb.set_trace()
-                    # # Optionally subtract the distant background again.
-                    # if bgCen is not None:
-                    #     bgCenRot = rotate_yx(bgCen, sciStars[ii], orientats[ii])
-                    #     subImg, bg = subtract_bg(subImg, bgCenRot, bgRadius)
-                    # # Measure and subtract a radial profile from the
-                    # # PSF-subtracted individual image.
-                    # subImgMasked = subImg.copy()
-                    # if radProfMasks is not None:
-                    #     subImgMasked[radProfMasks[ii]] = np.nan
-                    # meanRadProf = measure_mean_radial_prof(subImgMasked, sciStars[ii],
-                    #                                        paList=radProfPaList - orientats[ii],
-                    #                                        paHW=radProfPaHW, rMax=radProfMax)
-                    #                                        # paList=np.arange(170., 271., 5.) - orientats[ii])
-                    #                                        # paList=np.append(np.arange(20., 31., 5.), np.arange(170., 271., 5.)) - orientats[ii])
-                    # subImgs.append(subImg - meanRadProf)
-                    # # subImgs.append(subImg)
-                    # # plt.figure(13)
-                    # # plt.clf()
-                    # # plt.imshow(subImg - meanRadProf, vmin=-1., vmax=10.)
-                    # # plt.draw()
-                    # # breakpoint()
 
- # # TEMP TESTING!!! Dither reference image location to optimize chi^2.
- #                bestDither, bestRef = dither_subtract_psf(img,
- #                                                          ref=np.sum(((10**pf[0].transpose())*refImgsMasked.transpose()).transpose(), axis=0),
- #                                                          refStar=np.array([1024., 1024.]),
- #                                                          shift=0.01, nIm=ii)
- # TEMP TESTING!!! Dither least-squares optimization.
                 p0_dither = np.array([0.1, 0.1])
                 pf_dither = leastsq(dither_residuals, p0_dither,
                              args=(img,
                                    np.sum(((10**pf[0].transpose())*refImgs.transpose()).transpose(), axis=0),
-                                   refMasks[0], np.array([1024., 1024.])),
+                                   refMasks[0], np.array([1024., 1024.]),
+                                   True),
                              full_output=1, factor=1, epsfcn=0.1)
                 bestDither = np.array([pf_dither[0][0], pf_dither[0][1]])
 
@@ -682,8 +555,8 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     ditheredRefMasked = ditheredRef.copy()
                     ditheredRefMasked[refMasks[0]] = np.nan
                     subImg = sciImgs[ii] - ditheredRefMasked
-                    print(f"Updated PSF subtraction with best dither {bestDither}")
- # END TESTING TEMP!!!
+                    print(f"Updated PSF subtraction with best dither "\
+                          f"{bestDither}")
 
             # Optionally subtract the distant background again.
             if bgCen is not None:
@@ -696,31 +569,17 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                 if radProfMasks is not None:
                     subImgMasked[radProfMasks[ii]] = np.nan
                 meanRadProf = measure_mean_radial_prof(subImgMasked, sciStar,
-                                                       paList=radProfPaList - orientats[ii],
-                                                       paHW=radProfPaHW, rMax=radProfMax)
-                                                       # paList=np.arange(170., 271., 5.) - orientats[ii])
-                                                       # paList=np.append(np.arange(20., 31., 5.), np.arange(170., 271., 5.)) - orientats[ii])
+                                        paList=radProfPaList - orientats[ii],
+                                        paHW=radProfPaHW, rMax=radProfMax)
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 subImgs.append(subImg - meanRadProf)
-                print("\nSubtracted mean radial profile after main PSF subtraction\n")
+                print("\nSubtracted mean radial profile after main "\
+                      "PSF subtraction\n")
             else:
                 subImgs.append(subImg)
                 meanRadProf = 0
-            # plt.figure(13)
-            # plt.clf()
-            # plt.imshow(subImgs[-1], vmin=0., vmax=1.)
-            # plt.draw()
-            print(pf)
 
-            # plt.figure(1)
-            # plt.clf()
-            # plt.imshow(polybf)
-            # plt.draw()
-            # plt.figure(2)
-            # plt.clf()
-            # plt.imshow(sciImgs[ii]- (10**pf[0][0])*refImgMasked - polybf, vmin=-1, vmax=1)
-            # plt.draw()
-            # pdb.set_trace()
+            print(pf)
 
         subImgs = np.array(subImgs)
 
