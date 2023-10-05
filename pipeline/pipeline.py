@@ -271,14 +271,46 @@ class Pipeline(object):
         return combineImgs, orientatsUnique
 
 
-    def find_star(self):
+    def find_star(self, imgs, mask):
         """
-        Locate the target star position in pixel coordinates.
+        Locate the target star position in pixel coordinates. The default is to
+        use a Radon transform-based algorithm to locate the center of the
+        occulted primary star via its diffraction spikes.
         """
         
-        print("find_star attribute not implemented yet")
-        pass
-        # find_star_radon()
+        # Find star.
+        stars = []
+
+        for ii, im in enumerate(imgs):
+            # Mask out the occulters before doing the radon transform.
+            imgIter = im + mask
+            imgIter[imgIter < -1e3] = 0.
+            # Do a radon transform to find star from diffraction spike pattern.
+            # radonIWA = 30 pix generally good for bar10
+            # sp_width = 30 pix generally good for bar10
+            if self.noRadon or self.forceStar:
+                stars.append(self.starFromWCS)
+                print("Assuming all stars at {}".format(self.starFromWCS))
+            else:
+                print("\nRadon transforming image {}...".format(ii))
+# FIX ME!!! This 106906 block is a kludge specific to Esposito et al. in prep
+# that needs to be removed eventually.
+                # HD 106906 wedgeb1.8 is special case with dithering along
+                # wedge, so handle that here.
+                if (self.targ == 'HD-106906') and (self.obsMode == 'wedgeb1.8'):
+                    stars.append(find_star_radon(imgIter,
+                                        self.starFromWCS_list[ii],
+                                        self.spikeAngles, IWA=self.radonIWA,
+                                        sp_width=20, r_mask=None)) # [pixels] y,x
+                else:
+                    stars.append(find_star_radon(imgIter,
+                                        self.starFromWCS,
+                                        self.spikeAngles, IWA=self.radonIWA,
+                                        sp_width=20, r_mask=None)) # [pixels] y,x
+
+        self.stars = np.array(stars) # [pixels] y,x
+
+        return
 
 
 # FIX ME!!! noOffsetDatasets is a kludge specific to Esposito et al. in prep
@@ -344,6 +376,10 @@ class Pipeline(object):
         roiY = [-200, 200]
         roiX = [-200, 200]
 
+# FIX ME!!! Instrument-specific stuff here needs to go into instrument modules.
+        # Angles at which diffraction spikes occur in STIS data [deg].
+        self.spikeAngles = np.array([44.9, 134.7]) # [deg] clockwise from 0 at +X
+
 
         # # Summarize the dataset info from FITS headers.
         # if len(glob(dataDir + 'obs_log*.csv')) < 1:
@@ -359,13 +395,12 @@ class Pipeline(object):
         psfRefName = self.info['psfRefName']
         if self.spWidth is None:
             self.spWidth = self.info[self.obsMode]['spWidth'] # diffraction spike mask width [pix]
-        radonIWA = self.info[self.obsMode]['radonIWA']
+        self.radonIWA = self.info[self.obsMode]['radonIWA']
+        radonIWA = self.radonIWA
         exclusions = self.info[self.obsMode]['exclude'] # masked region definitions
         exclusionsSci = self.exclusionsSci # science masking
         sub_r_in = self.exclusionsSci['r_in'] # PSF subtraction inner radius
         sub_r_out = self.exclusionsSci['r_out'] # PSF subtraction outer radius
-        starToUse = self.starToUse
-        forceStar = self.forceStar
 
         # Load observation log.
         self.load_obs_log(logPath=info.get('obsLogPath'))
@@ -400,17 +435,17 @@ class Pipeline(object):
         photflam_avg = np.mean([imgsHdrs[1][ii][0].get('PHOTFLAM', -1.) for ii in self.sciInds])
 
         # Either force star position or estimate based on headers.
-        if forceStar:
-            starFromWCS = starToUse
+        if self.forceStar:
+            self.starFromWCS = self.starToUse
         else:
-            starFromWCS_list = []
+            self.starFromWCS_list = []
             for ii, hdr in enumerate(imgsHdrs[1]):
                 # Get estimate of star position from target RA/Dec and WCS in header.
                 ww = wcs.WCS(hdr[1])
                 targRA = hdr[0]['RA_TARG']
                 targDec = hdr[0]['DEC_TARG']
-                starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
-            starFromWCS = np.mean(starFromWCS_list, axis=0)
+                self.starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
+            self.starFromWCS = np.mean(self.starFromWCS_list, axis=0)
 
         # Check number of images per fits file.
         nImgsPerFits = [len(imgsHdrs[0][ii]) for ii in range(len(imgsHdrs[0]))]
@@ -425,8 +460,8 @@ class Pipeline(object):
         if not self.noFixPix:
             intenseROI = 460
             sciImgs = fix_bad_pix(sciImgs,
-                                  intensify=[int(starFromWCS[0])-intenseROI//2,
-                                             int(starFromWCS[1])-intenseROI//2,
+                                  intensify=[int(self.starFromWCS[0])-intenseROI//2,
+                                             int(self.starFromWCS[1])-intenseROI//2,
                                              intenseROI, intenseROI])
 
     # ========== CALIBRATE FLUX ========== #
@@ -462,42 +497,17 @@ class Pipeline(object):
 
 
     # ==== ALIGN IMAGES TO COMMON STAR POSITION ==== #
-    
-        # Find star.
-        stars = []
-        # Angles at which diffraction spikes occur in STIS data [deg].
-        # spikeAngles = np.array([45., 135.]) # [deg] clockwise from 0 at +X
-        spikeAngles = np.array([44.9, 134.7]) # [deg] clockwise from 0 at +X
-        for ii, img in enumerate(orbitImgs):
-            # Mask out the occulters before doing the radon transform.
-            imgIter = img + occultMask
-            imgIter[imgIter < -1e3] = 0.
-            # Do a radon transform to find star from diffraction spike pattern.
-            # radonIWA = 30 pix generally good for bar10
-            # sp_width = 30 pix generally good for bar10
-            if self.noRadon or forceStar:
-                stars.append(starFromWCS)
-                print("Assuming all stars at {}".format(starFromWCS))
-            else:
-                print("\nRadon transforming image {}...".format(ii))
-                # HD 106906 wedgeb1.8 is special case with dithering along
-                # wedge, so handle that here.
-                if (targ == 'HD-106906') and (obsMode == 'wedgeb1.8'):
-                    stars.append(find_star_radon(imgIter, starFromWCS_list[ii], spikeAngles,
-                                    IWA=radonIWA, sp_width=20, r_mask=None)) # [pixels] y,x
-                else:
-                    stars.append(find_star_radon(imgIter, starFromWCS, spikeAngles,
-                                    IWA=radonIWA, sp_width=20, r_mask=None)) # [pixels] y,x
 
-        stars = np.array(stars) # [pixels] y,x
-    
+        # Find the occulted star's coordinates in every image.
+        self.find_star(orbitImgs, occultMask)
+
         # Define new aligned star position.
         if pad:
             matSize = np.array([2048, 2048])
             alignStar = matSize//2
         else:
             matSize = None
-            alignStar = np.round(stars[0])
+            alignStar = np.round(self.stars[0])
         self.alignStar = alignStar
 
         # Register images to align stars.
@@ -506,26 +516,24 @@ class Pipeline(object):
         alignImgs = []
         alignMasks = []
         for ii in tqdm(range(len(orbitImgs)), desc="Aligned images"):
-            alignImgs.append(shift_pix_to_pix(orbitImgs[ii], stars[ii],
-                                              finalYX=alignStar, outputSize=matSize,
+            alignImgs.append(shift_pix_to_pix(orbitImgs[ii], self.stars[ii],
+                                              finalYX=self.alignStar, outputSize=matSize,
                                               order=3, fill=0.))
-            alignMasks.append(shift_pix_to_pix(occultMask, stars[ii],
-                                               finalYX=alignStar, outputSize=matSize,
+            alignMasks.append(shift_pix_to_pix(occultMask, self.stars[ii],
+                                               finalYX=self.alignStar, outputSize=matSize,
                                                order=1, fill=-1e4))
         alignImgs = np.array(alignImgs)
         alignMasks = np.array(alignMasks)
-        # alignImgs = np.array([shift_pix_to_pix(orbitImgs[ii], stars[ii], finalYX=alignStar, outputSize=matSize, order=3) for ii in range(len(orbitImgs))])
-        # alignMasks = np.array([shift_pix_to_pix(occultMask, stars[ii], finalYX=alignStar, outputSize=matSize, order=1) for ii in range(len(orbitImgs))])
         # Preserve original star positions before overwriting stars with new
         # aligned position. Keep the offsets around for posterity.
-        self.starsOriginal = stars.copy()
-        stars[:] = alignStar
-        self.alignStarOffsets = stars - self.starsOriginal
+        self.starsOriginal = self.stars.copy()
+        self.stars[:] = self.alignStar
+        self.alignStarOffsets = self.stars - self.starsOriginal
 
         if self.debug:
             fig = plt.figure(3)
             for ii in range(len(alignImgs)):
-                st = np.round(stars[ii]).astype(int)
+                st = np.round(self.stars[ii]).astype(int)
                 fig.clf()
                 ax = plt.subplot(111)
                 ax.imshow(alignImgs[ii][st[0]+roiY[0]:st[0]+roiY[1],
@@ -573,11 +581,11 @@ class Pipeline(object):
 
         print("\nMaking PSF subtraction masks...")
         # Make mask for occulters and diffraction spikes.
-        radii = utils.make_radii(self.workingImgs[0], alignStar)
+        radii = utils.make_radii(self.workingImgs[0], self.alignStar)
         masks = []
         for ii, img in enumerate(self.workingImgs):
-            spikemask = utils.make_spikemask_stis(self.workingImgs[0], alignStar,
-                                                  spikeAngles, width=self.spWidth)
+            spikemask = utils.make_spikemask_stis(self.workingImgs[0], self.alignStar,
+                                                  self.spikeAngles, width=self.spWidth)
     # FIX ME!!! Combine spikemask with occulter mask here.
             masks.append(spikemask)
         masks = np.array(masks)
@@ -599,13 +607,13 @@ class Pipeline(object):
             if targ not in noOffsetDatasets:
                 sourceMasks[ind] = mask_exclusions(mask=sourceMasks[ind],
                                        exclusions=exclusionsSci,
-                                       cen=alignStar, cenOffset=self.alignStarOffsets[ind],
-                                       paOffset=-1*orientats[ind], spikeAngles=spikeAngles)
+                                       cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
+                                       paOffset=-1*orientats[ind], spikeAngles=self.spikeAngles)
             else:
                 sourceMasks[ind] = mask_exclusions(mask=sourceMasks[ind],
                                        exclusions=exclusionsSci,
-                                       cen=alignStar, cenOffset=np.zeros(2),
-                                       paOffset=-1*orientats[ind], spikeAngles=spikeAngles)
+                                       cen=self.alignStar, cenOffset=np.zeros(2),
+                                       paOffset=-1*orientats[ind], spikeAngles=self.spikeAngles)
             # Now make a new mask by folding in the radial masking, specifically for
             # PSF subtraction only.
     # TEMP!!!
@@ -633,14 +641,13 @@ class Pipeline(object):
     
     # TEMP!!! Force in a bg star mask for HD 111161 wedge
             if (targ == 'HD-111161') & (obsMode == 'wedgeb1.0'):
-                bgStarCen = np.array([987, 763]) - alignStar
+                bgStarCen = np.array([987, 763]) - self.alignStar
                 bgStarCenRot = np.array([np.cos(np.radians(orientats[ind]))*bgStarCen[0] - np.sin(np.radians(orientats[ind]))*bgStarCen[1],
                                          np.sin(np.radians(orientats[ind]))*bgStarCen[0] + np.cos(np.radians(orientats[ind]))*bgStarCen[1]], dtype=int)
-                bgStarCenRot += alignStar
+                bgStarCenRot += self.alignStar
                 bgStarMask = np.zeros(self.workingImgs[0].shape).astype(bool)
                 bgStarMask[:, bgStarCenRot[1]-15:bgStarCenRot[1]+15] = True
                 bgStarMasks.append(bgStarMask)
-                # bgstar_111161_mask = mask_rect(testMask, bg_exclude, alignStar, cenOffset=None, paOffset=0.)
                 
                 psfSubMasks[ind] += bgStarMask
                 sourceMasks[ind] += bgStarMask
@@ -649,10 +656,10 @@ class Pipeline(object):
             # IMPORTANT: cen here is in the padded image coordinate frame-- NOT the original.
             for excl in exclusionsSci.setdefault('spikes_yxr', []):
                 maskSpikesOffaxis = mask_spikes_offaxis(np.zeros(alignMasks[ind].shape), excl,
-                                                    cen=alignStar,
+                                                    cen=self.alignStar,
                                                     cenOffset=None,
                                                     paOffset=-1*orientats[ind],
-                                                    spikeAngles=spikeAngles)
+                                                    spikeAngles=self.spikeAngles)
                 maskSpikesOffaxis *= -1e4
                 alignMasks[ind] += maskSpikesOffaxis
                 psfSubMasks[ind][maskSpikesOffaxis < 0] = True
@@ -690,13 +697,13 @@ class Pipeline(object):
             if (targ == 'HD-106906') and (obsMode == 'wedgeb1.8'):
                 psfSubMasks[ind] = mask_exclusions(mask=psfSubMasks[ind],
                                             exclusions=exclusionsRef,
-                                            cen=alignStar, cenOffset=self.alignStarOffsets[self.refInds[0]],
-                                            paOffset=0, spikeAngles=spikeAngles)
+                                            cen=self.alignStar, cenOffset=self.alignStarOffsets[self.refInds[0]],
+                                            paOffset=0, spikeAngles=self.spikeAngles)
             else:
                 psfSubMasks[ind] = mask_exclusions(mask=psfSubMasks[ind],
                                             exclusions=exclusionsRef,
-                                            cen=alignStar, cenOffset=self.alignStarOffsets[ind],
-                                            paOffset=0, spikeAngles=spikeAngles) #-1*orientats[ind])
+                                            cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
+                                            paOffset=0, spikeAngles=self.spikeAngles) #-1*orientats[ind])
     
             if self.debug:
                 for ii in range(len(psfSubMasks)):
@@ -749,7 +756,7 @@ class Pipeline(object):
                                             self.workingImgs[self.refInds],
                                             psfSubMasks[self.sciInds],
                                             psfSubMasks[self.refInds],
-                                            stars[self.sciInds], C0=-1.,
+                                            self.stars[self.sciInds], C0=-1.,
                                             rmin=rmin, rmax=sub_r_out,
                                             ann=ann, orientats=orientats[self.sciInds],
                                             radProfPaList=radProfPaList,
@@ -776,9 +783,9 @@ class Pipeline(object):
                 inputImgs=alignImgsMasked[self.sciInds], inputHdrs=None,
                 psfPaths=fl, psfImgs=alignImgsMasked, mode='RDI',
                 ann=int(OWA-IWA), subs=1, minrot=0, mvmt=0, IWA=IWA, OWA=OWA,
-                numbasis=[1,2,3,5,15], maxnumbasis=None, star=stars,
+                numbasis=[1,2,3,5,15], maxnumbasis=None, star=self.stars,
                 highpass=False, pre_sm=None, spWidth=8., ps_spWidth=0., PAadj=0.,
-                parangs=None, aligned_center=alignStar[::-1],
+                parangs=None, aligned_center=self.alignStar[::-1],
                 collapse="mean", prfx=targ,
                 save_psf_cubes=False, save_aligned=False, restored_aligned=None,
                 lite=False, do_snmap=False, numthreads=4, sufx='', output=False,
@@ -790,9 +797,9 @@ class Pipeline(object):
                 inputImgs=self.workingImgs[self.sciInds], inputHdrs=None,
                 psfPaths=None, psfImgs=None, mode='ADI', 
                 ann=1, subs=1, minrot=0, mvmt=5, IWA=10., OWA=200.,
-                numbasis=[1,2,3,5,10,15], maxnumbasis=None, star=stars[self.sciInds],
+                numbasis=[1,2,3,5,10,15], maxnumbasis=None, star=self.stars[self.sciInds],
                 highpass=False, pre_sm=None, spWidth=8., ps_spWidth=0., PAadj=0.,
-                parangs=orientats[self.sciInds], aligned_center=alignStar[::-1],
+                parangs=orientats[self.sciInds], aligned_center=self.alignStar[::-1],
                 collapse="mean", prfx=targ,
                 save_psf_cubes=False, save_aligned=False, restored_aligned=None,
                 lite=True, do_snmap=False, numthreads=4, sufx='', output=False,
@@ -815,14 +822,14 @@ class Pipeline(object):
             # Derotate and combined PSF-subtracted images.
             print("Derotating PSF-subtracted images...")
             rotImgs = self.derotate(psfSubImgs, orientats[self.sciInds],
-                                    stars[self.sciInds])
+                                    self.stars[self.sciInds])
             
             # Also make a copy with images derotated in the wrong direction.
             # Make the widest deltaPA = 90 deg from being fully aligned.
             spreadPAs = orientats[self.sciInds].copy()
             spreadPAs[1:] -= np.arange(1, len(self.sciInds))*(90/(len(self.sciInds)-1))
             rotImgsBkwd = self.derotate(psfSubImgs, spreadPAs,
-                                        stars[self.sciInds])
+                                        self.stars[self.sciInds])
             
             
             # Optimize combination based on background levels, if needed.
@@ -855,15 +862,15 @@ class Pipeline(object):
                     if targ not in noOffsetDatasets:
                         finalMask = mask_exclusions(mask=finalMask,
                                        exclusions=exclusionsFinal,
-                                       cen=alignStar, cenOffset=alignStar - self.starsOriginal[0],
-                                       paOffset=0, spikeAngles=spikeAngles)
+                                       cen=self.alignStar, cenOffset=self.alignStar - self.starsOriginal[0],
+                                       paOffset=0, spikeAngles=self.spikeAngles)
                     else:
                         finalMask = mask_exclusions(mask=finalMask,
                                        exclusions=exclusionsFinal,
-                                       cen=alignStar, cenOffset=np.zeros(2),
-                                       paOffset=0, spikeAngles=spikeAngles)
+                                       cen=self.alignStar, cenOffset=np.zeros(2),
+                                       paOffset=0, spikeAngles=self.spikeAngles)
                     tmpImg[finalMask.astype(bool)] = np.nan
-                    meanRadProf = stis_psfsub.measure_mean_radial_prof(tmpImg, alignStar,
+                    meanRadProf = stis_psfsub.measure_mean_radial_prof(tmpImg, self.alignStar,
                                                            paList=info[obsMode]['radProfSub']['paList'],
                                                            paHW=info[obsMode]['radProfSub']['paHW'],
                                                            rMax=info[obsMode]['radProfSub']['rMax'])
@@ -922,8 +929,8 @@ class Pipeline(object):
                 hdu.header['INPUTTYP'] = (suff, 'Type of input data')
                 hdu.header['PSFSUBMD'] = (psfSubMode, 'PSF-subtraction mode')
                 hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
-                hdu.header['PSFCENTY'] = (alignStar[0], 'Y location of target star center')
-                hdu.header['PSFCENTX'] = (alignStar[1], 'X location of target star center')
+                hdu.header['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
+                hdu.header['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
                 hdu.header['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
                 hdu.header['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
                 hdu.header['TEXPTIME'] = (np.sum(exptimes_s), 'Total combined integration time in s')
@@ -982,13 +989,13 @@ class Pipeline(object):
                 if targ not in noOffsetDatasets:
                     sourceMaskDerot = mask_exclusions(mask=spikemask,
                                            exclusions=exclusionsSci,
-                                           cen=alignStar, cenOffset=self.alignStarOffsets[0],
-                                           paOffset=0, spikeAngles=spikeAngles)
+                                           cen=self.alignStar, cenOffset=self.alignStarOffsets[0],
+                                           paOffset=0, spikeAngles=self.spikeAngles)
                 else:
                     sourceMaskDerot = mask_exclusions(mask=spikemask,
                                            exclusions=exclusionsSci,
-                                           cen=alignStar, cenOffset=np.zeros(2),
-                                           paOffset=0, spikeAngles=spikeAngles)
+                                           cen=self.alignStar, cenOffset=np.zeros(2),
+                                           paOffset=0, spikeAngles=self.spikeAngles)
                 sourceMaskDerot[sourceMaskDerot == 1] = np.nan
                 stdPACen = info['diskPA_deg'] - 90.
                 if stdPACen < 0:
@@ -1012,21 +1019,21 @@ class Pipeline(object):
     
                 for ii in tqdm(range(len(rotImgs)), desc="Error maps"):
                     poissonMap = np.sqrt(np.abs(rotImgs_electrons[ii]))
-                    theta = utils.make_phi(rotImgs_electrons[ii], alignStar,
+                    theta = utils.make_phi(rotImgs_electrons[ii], self.alignStar,
                                            zeroAxis='+y')
                     # Get background noise map as std deviations of annuli.
                     stdMap = utils.get_partialann_stdmap(rotImgs_electrons[ii]+sourceMaskDerot,
-                                        alignStar, radii, theta, stdPARange,
+                                        self.alignStar, radii, theta, stdPARange,
                                         r_max=400, rdelta=3)
                     # Extrapolate background noise into inner regions where we
                     # don't sample it well or at all but we do have data.
-                    stdStrip1 = gaussian_filter(stdMap[alignStar[0], alignStar[1]-70:alignStar[1]], 3)
-                    stdStrip2 = gaussian_filter(stdMap[alignStar[0], alignStar[1]+1:alignStar[1]+1+70], 3)
+                    stdStrip1 = gaussian_filter(stdMap[self.alignStar[0], self.alignStar[1]-70:self.alignStar[1]], 3)
+                    stdStrip2 = gaussian_filter(stdMap[self.alignStar[0], self.alignStar[1]+1:self.alignStar[1]+1+70], 3)
                     stdStrip = np.nanmean([stdStrip1, stdStrip2[::-1]], axis=0)
-                    fe = interp1d(np.arange(alignStar[1]-70, alignStar[1])[~np.isnan(stdStrip)],
-                                  gaussian_filter(stdMap[alignStar[0], alignStar[1]-70:alignStar[1]], 3)[~np.isnan(stdStrip)],
+                    fe = interp1d(np.arange(self.alignStar[1]-70, self.alignStar[1])[~np.isnan(stdStrip)],
+                                  gaussian_filter(stdMap[self.alignStar[0], self.alignStar[1]-70:self.alignStar[1]], 3)[~np.isnan(stdStrip)],
                                   kind='linear', fill_value="extrapolate")
-                    interpStd = fe(np.arange(alignStar[1]-70, alignStar[1]))
+                    interpStd = fe(np.arange(self.alignStar[1]-70, self.alignStar[1]))
                     for rr in range(1, 30): #len(interpStd)):
                         # if np.any(np.isnan(stdMap[(radii >= rr - 0.5) & (radii < rr + 0.5)])):
                         stdMap[(radii >= rr - 0.5) & (radii < rr + 0.5)] = interpStd[::-1][rr]
@@ -1066,8 +1073,8 @@ class Pipeline(object):
                         hdu.header['INPUTTYP'] = (suff, 'Type of input data')
                         hdu.header['PSFSUBMD'] = (psfSubMode, 'PSF-subtraction mode')
                         hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
-                        hdu.header['PSFCENTY'] = (alignStar[0], 'Y location of target star center')
-                        hdu.header['PSFCENTX'] = (alignStar[1], 'X location of target star center')
+                        hdu.header['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
+                        hdu.header['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
                         hdu.header['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
                         hdu.header['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
                         hdu.header['BUNIT'] = (bunit, 'brightness units')
