@@ -17,7 +17,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.interpolate import interp1d
 
 # Internal imports
-import alicesaur
+from alicesaur import pipeline
 from alicesaur.psfsub import stis_psfsub
 from alicesaur import utils
 from alicesaur.calibration.bad_pix import fix_bad_pix
@@ -37,7 +37,7 @@ class Pipeline(object):
     if os.environ.get('ALICESAUR_HOME') not in [None, '']:
         packageHome = os.path.abspath(os.environ.get('ALICESAUR_HOME'))
     else:
-        packageHome = os.path.abspath(alicesaur.__path__[0])
+        packageHome = os.path.dirname(pipeline.__path__[0])
 
     # Default to STIS instrument.
     instrument = 'stis'
