@@ -7,7 +7,14 @@ import pdb
 import time
 
 # Internal imports
-from alicesaur.pipeline.stis.pipeline_stis import PipelineSTIS
+try:
+    from alicesaur.pipeline.stis.pipeline_stis import PipelineSTIS
+except ImportError as ee:
+    print(f"\n{ee}")
+    print("\nUh oh! The alicesaur directory may not have been found. Make "\
+          "sure its parent directory is in your PYTHONPATH and try again."\
+          " Exiting.\n")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
