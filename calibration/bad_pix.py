@@ -167,6 +167,139 @@ def mask_bad_pix(im, inst=None, Nsig=7, neighborDist=5, thr_min=np.inf,
     return im
 
 
+def fix_bad_dq(im, dq_mask, inst=None, neighborDist=5,
+               iterate=True, window=False):
+    """
+    Remove bad pixels by comparing their value to mean of neighbor pixels.
+
+    Inputs:
+        im: array
+            Image to fix bad pixels in.
+
+        inst: str
+            Name of instrument im came from; only needed if instrument
+            has known bad pixel locations.
+
+        neighborDist: int
+
+        iterate: bool, True to iterate until fraction of bad pixels removed
+            is < iterThresh. Default is True.
+
+    Output:
+        numpy array with bad pixels = median of nearest neighbors.
+    """
+
+    print("\nMarking bad pixels (may take a few minutes)...")
+
+    # Create zero arrays same size as im but padded by 2 pixels on each side.
+    # Shift im around edge of an 8-pixel square, with starting point
+    # (0,0), to make 16 new arrays with differentially-shifted im.
+    # for yy in [-3, -2, 2, 3]:
+    #     for xx in [-3, -2, 2, 3]:
+
+    im_orig = im.copy()        
+
+    if window:
+        patch = im[window[0]-neighborDist:window[1]+neighborDist+1,
+                   window[2]-neighborDist:window[3]+neighborDist+1]
+    else:
+        patch = im
+
+    yx_list = []
+    for yy in range(-neighborDist, neighborDist+1):
+            for xx in range(-neighborDist, neighborDist+1):
+                if not (yy==0 and xx==0):
+                    yx_list.append((yy,xx))
+
+    Nbad = np.sum(dq_mask) # initialize fraction of bad pixels
+    it = 0 # iteration count
+    while Nbad > 0:
+        mat_list = []
+
+        for yx in yx_list:
+            if yx==(0,0):
+                continue
+            # mat = np.zeros((im.shape[0]+4, im.shape[1]+4))
+            # mat[yx[0]:yx[0]+im.shape[0], yx[1]:yx[1]+im.shape[1]] = im.copy()
+            mat = utils.shift_im_center(patch, (patch.shape[0]/2,patch.shape[1]/2),
+                        (patch.shape[0]/2 + yx[0],patch.shape[1]/2 + yx[1]),
+                        fillval=np.nan, size_out=None)
+            mat_list.append(mat)
+
+        mat_list = np.array(mat_list)
+
+        # Calculate the mean of nearest neighbors (ignore NaN).
+        # # Calculate standard deviation of nearest neighbors (ignore NaN).
+        # # (Note: equivalent to deprecated scipy.stats.nanstd(mat_list, axis=0, bias=True))
+        # nebStd_mat = nanstd(mat_list, axis=0)
+        # nebMeanArr = nanmean(mat_list, axis=0)
+        # nebMedianArr = np.nanmedian(mat_list, axis=0)
+        filtSize = 5
+
+        nebMedianArr = median_filter(patch, size=filtSize, mode='reflect')
+        # Calculate standard deviation of nearest neighbors (ignore NaN).
+        # (Note: equivalent to deprecated scipy.stats.nanstd(mat_list, axis=0, bias=True))
+        # nebStdArr = np.nanstd(mat_list, axis=0)
+
+        # Replace all "bad" pixels with median of neighbors.
+        patch[dq_mask] = nebMedianArr[dq_mask]
+        # Then replace any NaN in patch with the image's original value.
+        patch[np.isnan(patch)] = im[np.isnan(im_orig)]
+
+        # Switch bad pix to good everywhere we've already fixed them.
+        dq_mask[np.isfinite(nebMedianArr) & np.isfinite(patch)] = False
+
+        if window:
+            im[window[0]-neighborDist:window[1]+neighborDist+1, window[2]-neighborDist:window[3]+neighborDist+1] = patch
+        else:
+            im = patch
+
+        Nbad = np.sum(dq_mask)
+
+        print(f"Iter {it}: {Nbad} bad pixels fixed")
+
+        if not iterate:
+            Nbad = 0.
+        else:
+            it += 1
+
+        # sigmaMap = np.abs((nebMedianArr - patch)/nebStdArr)
+        # 
+        # plt.figure(1)
+        # plt.clf()
+        # plt.imshow(nebStdArr, vmin=-10, vmax=10)
+        # plt.title('Std dev')
+        # plt.draw()
+        # 
+        # plt.figure(2)
+        # plt.clf()
+        # plt.imshow(nebMedianArr, vmin=-100, vmax=100)
+        # plt.title('Median filtered')
+        # plt.draw()
+        # 
+        # plt.figure(3)
+        # plt.clf()
+        # plt.imshow(patch - nebMedianArr, vmin=-10, vmax=10)
+        # plt.title('Original - Median')
+        # plt.draw()
+        # 
+        # plt.figure(4)
+        # plt.clf()
+        # plt.imshow(sigmaMap, vmin=-Nsig, vmax=Nsig)
+        # plt.title('Sigma map ({} to {})'.format(-Nsig, Nsig))
+        # plt.draw()
+        # 
+        # plt.figure(5)
+        # plt.clf()
+        # plt.imshow(patch, vmin=-100, vmax=100)
+        # plt.title('Fixed original')
+        # plt.draw()
+        # 
+        # pdb.set_trace()
+
+    return im
+
+
 def interp_bad_pix(im, inst=None, Nsig=5, filtSize=5, thr_min=np.inf, low_only=False,
                  iterate=False, iterThresh=0.0005):
     """
