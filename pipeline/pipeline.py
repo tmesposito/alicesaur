@@ -351,6 +351,27 @@ class Pipeline(object):
 
         return
 
+    def update_wcs(self, imgs):
+        """
+        Update header WCS reference coordinates and array dimensions given
+        image arrays and taking self.stars coordinates.
+        """
+        for ii in self.sciInds:
+            for jj, hdr in enumerate(self.sciHdrs[ii]):
+                if 'CRPIX1' in hdr.keys():
+                    self.sciHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
+                    self.sciHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
+                if 'NAXIS1' in hdr.keys():
+                    self.sciHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
+                    self.sciHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
+        for ii in self.refInds:
+            for jj, hdr in enumerate(self.refHdrs[ii]):
+                if 'CRPIX1' in hdr.keys():
+                    self.refHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
+                    self.refHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
+                if 'NAXIS1' in hdr.keys():
+                    self.refHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
+                    self.refHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
 
     def derotate(self, imgs, orientats, cens):
     
@@ -660,6 +681,8 @@ class Pipeline(object):
                             'HD-114082', 'HD-115600', 'HD-117214',
                             'HD-129590', 'HD-145560', 'HD-146897']
 
+        # Update header WCS reference coordinates and image dimensions.
+        self.update_wcs(alignImgs)
 
     # ==== BACKGROUND SUBTRACTION ==== #
 
