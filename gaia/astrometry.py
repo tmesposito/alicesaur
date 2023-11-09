@@ -1,0 +1,278 @@
+import numpy as np
+from matplotlib import pyplot as plt
+from astropy.io import ascii, fits
+import glob, os, shutil
+
+from astropy import units as u
+from astropy import time
+import emcee
+import corner
+from matplotlib import colors, cm
+import scipy.stats as stats
+from scipy import linalg
+import multiprocessing as mp
+from scipy import optimize as op
+from alicesaur.gaia import gaia_utils, gaia_plot, fit_psf
+
+from astroquery.gaia import Gaia
+from astropy.wcs import WCS
+
+from matplotlib import rc
+rc('text', usetex=False)
+
+
+def lnlike(p, sky_pos, sky_cov, px_pos, px_cov, include_indx):
+    
+    chi2 = 0
+    ps_inv = np.array([1.0/p[2], 1.0/p[3]])
+    target_pos = np.array((p[0], p[1]))
+
+    rot_mat = np.array([[-np.cos(p[4]), np.sin(p[4])], [np.sin(p[4]), np.cos(p[4])]])
+    ps_mat = np.array([[ps_inv[0]**2, ps_inv[0]*ps_inv[1]], [ps_inv[0]*ps_inv[1], ps_inv[1]**2]])
+
+    sky_pos2 = []
+    sky_cov2 = []
+    sky_chi2 = []
+
+    for i in include_indx:
+        new_pos = ((rot_mat.dot(sky_pos[i]))*ps_inv) + target_pos
+        new_cov = (rot_mat.dot(sky_cov[i]).dot(rot_mat.T)) * ps_mat
+
+        resid = new_pos - px_pos[i]
+        cov = px_cov[i] + new_cov
+        cov_inv = np.linalg.inv(cov)
+
+        new_chi2 = resid.T.dot(cov_inv).dot(resid)
+
+        chi2 += new_chi2
+
+        sky_pos2.append(new_pos)
+        sky_cov2.append(new_cov)
+        sky_chi2.append(new_chi2)
+
+    blob = np.concatenate((sky_chi2, np.array(sky_pos2).flatten(), np.array(sky_cov2).flatten()))
+
+    return -0.5*chi2, blob
+  
+def lnprior(p):
+
+    if (p[2] <= 5) | (p[2] > 200.0):
+        return -np.inf
+    if (p[3] <= 5) | (p[3] > 200.0):
+        return -np.inf
+    if (p[4] < 0.0) | (p[4] > (2.0*np.pi)):
+        return -np.inf
+
+    return 0
+
+def lnprob(p, sky_pos, sky_cov, px_pos, px_cov, include_indx):
+    
+    lnp = lnprior(p)
+
+    lnl, blob = lnlike(p, sky_pos, sky_cov, px_pos, px_cov, include_indx)
+
+    return lnp + lnl, blob
+
+def mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, guess_x, guess_y, guess_ps, guess_tn, nsteps=1000, nburn=250):
+
+    ndim, nwalkers = 5, 256
+
+    labels = [r'$x_0$', r'$y_0$', r'ps$_x$', r'ps$_y$', r'$\theta$']
+    p0 = [guess_x, guess_y, guess_ps, guess_ps, guess_tn % (2.0*np.pi)]
+    dp = [1.0, 1.0, 0.1, 0.1, 0.1]
+    pos0 = np.zeros((nwalkers, ndim))
+    for k in range(0, ndim):
+        pos0[..., k] = np.random.normal(p0[k], dp[k], nwalkers)
+
+    args = (sky_pos, sky_cov, px_pos, px_cov, include_indx)
+
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=args)
+
+    _ = sampler.run_mcmc(pos0, nsteps)
+
+    samples = sampler.get_chain() # nsteps, nwalkers, ndim
+    lnp = sampler.get_log_prob() 
+    #blobs = sampler.get_blobs() # steps, walkers, blob#, star#
+
+    n_stars = len(include_indx)
+    blobs_chi = sampler.get_blobs()[:,:,0:n_stars]
+    blobs_pos = sampler.get_blobs()[:,:,1*n_stars:3*n_stars].reshape((nsteps, nwalkers, n_stars, 2))
+    blobs_cov = sampler.get_blobs()[:,:,3*n_stars:7*n_stars].reshape((nsteps, nwalkers, n_stars, 2, 2))
+
+    print(samples.shape)
+
+    sampler.reset()
+
+    return samples, lnp, [blobs_chi, blobs_pos, blobs_cov]
+
+def calculate_max_radius(hdr):
+
+    # Calculates search radius required to encompass image using the WCS reference position as an origin
+
+    ra0, de0 = hdr['CRVAL1'], hdr['CRVAL2']
+    x, y = np.meshgrid(np.arange(hdr['NAXIS1']), np.arange(hdr['NAXIS2']))
+    w = WCS(hdr)
+    sky = w.pixel_to_world(x, y).flatten()
+    sep = sky.separation(w.pixel_to_world(hdr['CRPIX1'], hdr['CRPIX2'])).arcsec
+
+    max_sep = np.nanmax(sep) * 1.1
+
+    return max_sep
+
+def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3', exclude_extra=[]):
+
+    '''
+    # Function name TBD
+
+    im_path - path to reduced FITS file
+    target_id - Gaia source identifier for the occulted target
+    target_rv - Tuple containing target radial velocity and uncertainty (km/s)
+    target_xy - Pixel position of target in the FITS file
+    gaia_catalogue - Which Gaia data release to use
+    exclude_extra - Gaia source IDs of stars to exclude
+
+    '''
+
+    filename = im_path.replace('.fits', '')
+
+    '''
+    Open FITS file
+    '''
+
+    with fits.open(im_path) as hdu:
+        ## TODO - extension may vary by instrument - not an issue if reading image/header from object
+        im = hdu[0].data
+        hdr = hdu[0].header
+        s = im.shape
+
+
+    '''
+    Get useful quantities from header
+    '''
+
+    w = WCS(hdr)
+    ref_pos = w.pixel_to_world(hdr['CRPIX1'], hdr['CRPIX2'])
+    guess_ps = np.mean([x.to(u.mas).value for x in w.proj_plane_pixel_scales()])
+    guess_tn = hdr['ORIENTAT']*np.pi/180.0
+
+    # Exposure mid-point in decimal years
+    t_hst = time.Time(hdr['EXPSTART'] + (hdr['EXPTIME']/86400.0)/2., format='mjd').decimalyear
+
+
+    '''
+    Perform Gaia query
+    ## TODO - add caching of results
+    '''
+
+    if gaia_catalogue == 'DR2':
+        Gaia.MAIN_GAIA_TABLE = "gaiadr2.gaia_source"
+        t_gaia = 2015.5
+    elif gaia_catalogue == 'DR3':
+        Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source"
+        t_gaia = 2016.0
+    else:
+        raise NotImplementedError
+
+    Gaia.ROW_LIMIT = 10000 # If we have more than this, something has gone wrong...
+
+    # TODO - add inner radius for search query!
+
+    search_radius = calculate_max_radius(hdr)
+    query = Gaia.cone_search_async(ref_pos, radius=search_radius*u.arcsec)
+    data = query.get_results()
+
+    # Sanitize the results, remove entries without proper motion and parallax measurements
+    indx_good = ~data['parallax'].mask | ~data['pmra'].mask | ~data['pmdec'].mask
+    data = data[indx_good]
+    n_stars = len(data)
+
+    source_id = data['source_id'].data
+
+    '''
+    Set various parameters for the image
+    '''
+    # List of source IDs to exclude from analysis
+    exclude_id = []
+    exclude_id += [target_id, ] # Always exclude the target
+
+    for i in exclude_extra:
+        if i in source_id:
+            exclude_id += [i, ]
+
+    '''
+    Propagate gaia astrometry to the HST epoch
+    '''
+    # Propagate astrometry and calculate tangent plane offsets relative to target
+    dt = t_hst - t_gaia
+    sky_pos, sky_cov = gaia_utils.tangent_plane_offsets(data, t_hst, dt, np.where(source_id == target_id)[0][0], target_rv, n_mc=int(1e3))
+
+    # Compute pixel offsets using guess plate scale and true north angle
+    x = (1.0/guess_ps) * (-sky_pos[:, 0]*np.cos(guess_tn) + sky_pos[:, 1]*np.sin(guess_tn)) + target_xy[0]
+    y = (1.0/guess_ps) * (sky_pos[:, 0]*np.sin(guess_tn) + sky_pos[:, 1]*np.cos(guess_tn)) + target_xy[1]
+
+    '''
+    TODO: filter the list here
+    there's a boolean array for this in the data structure (align_masks, and spike_masks)
+    also carry these through to the PSF fitting step, give these flagged areas a weighting of zero
+
+    '''
+
+    for i in range(0, n_stars):
+        if (20 <= x[i] <= s[1]) and (20 <= y[i] <= s[0]):
+            pass
+        else:
+            exclude_id += [source_id[i]]
+
+    '''
+    Create an overview figure showing the image and the Gaia sources, symbols indicating which are used
+    '''
+    _ = gaia_plot.plot_overview(im, x, y, source_id, exclude_id, outname='overview-{}'.format(filename))
+
+    '''
+    Fit the pixel position of each source
+    TODO: Save stamps showing the data, model, and residual, as well as FWHM and amplitude
+    '''
+    star_errors = None
+    if inst == 'STIS':
+        xoff, yoff = -0.054, -0.047
+        xinf, yinf = 0.05, 0.05
+    px_pos, px_cov, data_stamps, model_stamps, model_fits = fit_psf.fit(im, x, y, source_id, exclude_id, star_errors, [xoff, yoff], [xinf, yinf], method='gaussian')
+
+    '''
+    TODO: additional filtering here based on peak flux, FWHM
+    '''
+
+    '''
+    Fit plate scale, true north, and (x,y) position of target
+    '''
+    include_id = [k for k in source_id if k not in exclude_id] # A list of the Gaia IDs to use in the analysis
+    include_indx = [list(source_id).index(k) for k in include_id] # A list of the indicies for those stars in the `source_id` list
+    #_ = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=1000, nburn=250)
+
+    samples, lnp, blobs = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=100, nburn=25)
+
+    # Generate list of chi2, to remove outliers in a second run
+    # Updated star center could be used as input for the second run
+
+    '''
+    Posterior distributions for star position, plate scales, and north angle
+    '''
+    s = samples.shape
+    final_target_x = samples[s[0]//2:,:,0].flatten()
+    final_target_y = samples[s[0]//2:,:,1].flatten()
+    final_ps_x = samples[s[0]//2:,:,1].flatten()
+    final_ps_y = samples[s[0]//2:,:,2].flatten()
+    final_tn = samples[s[0]//2:,:,3].flatten()
+
+    '''
+    Create gallery plot of each star
+    '''
+    _ = gaia_plot.plot_fits(data, include_indx, px_pos, px_cov, data_stamps, model_stamps, model_fits, samples, lnp, blobs, xoff, yoff, outname='psffits-{}'.format(filename))
+
+
+if __name__ == '__main__':
+    # stars to test exclude_extra:
+    # 6072903200423956608 - star 18 behind the wedge
+    main('vi01_1.fits', 'STIS', 6072902994276659200, [12.18, 0.15], [530, 304], gaia_catalogue='DR3', exclude_extra=[])
+
+
