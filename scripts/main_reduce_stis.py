@@ -27,6 +27,14 @@ if __name__ == "__main__":
                         default="./", type=str, nargs='?',
                         help=desc)
 
+    desc = 'Instrument from which the data originated: stis (default) or acs.'
+    parser.add_argument('--instrument', choices=['stis', 'acs'],
+                        default="stis", type=str, nargs='?', help=desc)
+
+    desc = 'Image input file type: either flt or sx2 (default).'
+    parser.add_argument('--inputType', choices=['flt', 'sx2'],
+                        default="sx2", type=str, nargs='?', help=desc)
+
     desc = 'Observation mode: bar10 or wedgeb1.0. Default is generic "nomode".'
     parser.add_argument('--obsMode', metavar='obsMode',
                         default="nomode", type=str, nargs='?',

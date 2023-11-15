@@ -162,3 +162,21 @@ def stack_images(imPaths, errorPaths=[], mode='weightedMean', negToNan=False,
     # plt.close()
 
     return
+
+
+def zero_pad(data, outsize, method='simple'):
+
+    if (data.shape[0] > outsize[0]) or (data.shape[1] > outsize[1]):
+        print("***HELP!!! One or more outsize dimensions {outsize} are" \
+              f"smaller than the input image dimensions {data.shape}. " \
+              "Cannot zero-pad this image.")
+        return data
+
+    pad_y = (outsize[0] - data.shape[0])//2
+    pad_x = (outsize[1] - data.shape[1])//2
+
+    padded = np.zeros(outsize)
+
+    padded[pad_y:pad_y+data.shape[0], pad_x:pad_x+data.shape[1]] = data.copy()
+
+    return padded
