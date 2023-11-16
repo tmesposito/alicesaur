@@ -20,7 +20,7 @@ from scipy.interpolate import interp1d
 from alicesaur import pipeline
 from alicesaur.psfsub import stis_psfsub
 from alicesaur import utils
-from alicesaur.calibration.bad_pix import fix_bad_pix
+from alicesaur.calibration.bad_pix import fix_bad_dq_knn
 from alicesaur.calibration.align import find_star_radon, shift_pix_to_pix
 from alicesaur.calibration.flux import convert_intensity
 from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
@@ -46,7 +46,7 @@ class Pipeline(object):
     # Image plate scale.
     pscale = 0.0507 # [arcsec/pixel]
     occultMaskPath = os.path.join(packageHome, 'masks',
-                                  'mask_stis_occulters_sx2_bar_wedgeB.fits')
+                                  'mask_stis_occulters_sx2_bar_wedgeB.fits' #WHAT)
 
     def __init__(self, **kwargs):
 
@@ -177,7 +177,69 @@ class Pipeline(object):
                 targs.append(hdrs[0]['TARGNAME'].lower())
 
         return imgsHdrs, np.array(targs), fl
+
+     #for flt files 
+     #if (suffix='flt')
+
+    def display_fits_content(file_name, plot_images=False):
+    sci_data, err_data, dq_data = [], [], []
+    sci_headers, err_headers, dq_headers = [], [], []
+    dq_bool_16 = dq_bool_8192 = None  # Initialize to None
+    target_name = None
+    file_names = []
+
+    with fits.open(file_name) as hdu_list:
+        file_names.append(file_name)
+        for hdu in hdu_list:
+            print("Header:")
+            print(repr(hdu.header))
+            print("\nData:")
+            print(hdu.data)
+
+            if 'SCI' in hdu.header.get('EXTNAME', ''):
+                sci_data.append(hdu.data)
+                sci_headers.append(hdu.header)
+            elif 'ERR' in hdu.header.get('EXTNAME', ''):
+                err_data.append(hdu.data)
+                err_headers.append(hdu.header)
+            elif 'DQ' in hdu.header.get('EXTNAME', ''):
+                dq_data.append(hdu.data)
+                dq_headers.append(hdu.header)
+
+            if 'TARGNAME' in hdu.header:
+                target_name = hdu.header['TARGNAME']
+
+            if plot_images and hdu.data is not None and hdu.is_image:
+                plt.imshow(hdu.data, cmap='gray',norm=SymLogNorm(vmin=0.01, vmax=100, linthresh = 0.01))
+                plt.colorbar()
+                plt.title('HDU: ' + hdu.header.get('EXTNAME', 'N/A'))
+                plt.show()
+    sci_data = np.array(sci_data)
+    err_data = np.array(err_data)
+    dq_data = np.array(dq_data)
     
+    if dq_data.size > 0:
+        dq_bool_16 = dq_data == 16
+        dq_bool_8192 = dq_data == 8192
+
+    return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, err_headers, dq_headers, target_name, file_names
+
+    def pixelfixing(self):
+            # ========== FIX BAD PIXELS ========== #
+        # Fix bad pixels iteratively in all images.
+        if not self.noFixPix:
+            #file_name = 'odxy08040_flt.fits'
+            #sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192 = display_fits_content(file_name, plot_images=True)
+            sciImgs = fix_bad_dq_knn(sci_data, dq_bool_16, k=5, max_distance=np.inf, iterate=True)
+            sciImgs2 = fix_bad_dq_knn(sciImgs, dq_bool_8192, k=5, max_distance=np.inf, iterate=True)
+            return sciImgs2
+
+#example usage        
+
+#file_name = 'odxy08040_flt.fits'
+#sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192 = display_fits_content(file_name, plot_images=True)
+
+
     
     def summarize_obs(self, suffix='sx2', dsName=None):
         """
@@ -223,7 +285,52 @@ class Pipeline(object):
         print("Wrote observation summary table to {}".format(self.dataDir + table_name))
     
         return
+
+ def summarize_obs(self, suffix='flr', dsName=None):
+        """
+        Summarize FITS header info in a table.
+
+        suffix: str suffix of FITS files to summarize.
+        dsName: str optional name of dataset for log filename; defaults to the
+            lowest level directory of dataDir.
+        """
+
+        if not os.path.exists(self.dataDir):
+            print("\n!! **Directory {} does not exist ** !!\n".format(self.dataDir))
+            raise OSError
     
+        fl = np.sort(glob(self.dataDir + '*_{}.fits*'.format(suffix)))
+    
+        rows = []
+        col_names = ['I', 'FILENAME', 'TARGNAME', 'ORIENTAT', 'TDATEOBS', 'TTIMEOBS', 'PROPAPER', 'NCOMBINE',
+                     'EXPTIME', 'NDATAARR']
+        col_dtypes = ['int32', 'U80', 'U40', 'U40', 'U40', 'U40', 'U40', 'int32',
+                      'float', 'int32']
+    
+        for ii, ff in enumerate(fl):
+            hdr0 = fits.getheader(ff, ext=0)
+            hdr1 = fits.getheader(ff, ext=1)
+            # Get number of data arrays in _flt.fits file.
+            try:
+                ff_flt = ff.split(suffix)[0] + 'flt.fits'
+                hdr_flt = fits.getheader(ff_flt, ext=0)
+                nDataDim = hdr_flt['NEXTEND'] + 1
+            except:
+                nDataDim = -1
+            rows.append((ii+1, os.path.split(ff)[-1], hdr0.get('TARGNAME'), hdr1.get('ORIENTAT'), hdr0.get('TDATEOBS'),
+                         hdr0.get('TTIMEOBS'), hdr0.get('PROPAPER'),
+                         hdr1.get('NCOMBINE'), hdr1.get('EXPTIME'), nDataDim))
+    
+        sum_table = table.Table(rows=rows, names=col_names, dtype=col_dtypes)
+    
+        if dsName is None:
+            dsName = os.path.split(self.dataDir[:-1])[-1]
+        table_name = 'obs_log_{}.csv'.format(dsName)
+        sum_table.write(self.dataDir + table_name, format='csv', overwrite=True)
+        print("Wrote observation summary table to {}".format(self.dataDir + table_name))
+    
+        return
+       
     
     def load_obs_log(self, logPath=None):
         """
@@ -461,7 +568,7 @@ class Pipeline(object):
         hdu.writeto(self.dataDir + saveName, overwrite=True)
         print(f"\n{filetype} saved as {self.dataDir + saveName}")
 
-
+    #move bad pixel UP yo load images
     def run(self):
         """
         Run the complete reduction pipeline from start to finish.
@@ -473,7 +580,8 @@ class Pipeline(object):
         targ = self.targ
         ann = self.ann
 # FIX ME!!! Convert self.inputType to input arg.
-        self.inputType = 'sx2'
+        #self.inputType = 'sx2'
+        self.inputType = 'flt'
         psfSubMode = self.psfSubMode
         noCombine = self.noCombine
         pad = not self.noPad
@@ -515,6 +623,10 @@ class Pipeline(object):
         # Each item in [0] and [1] is also a list of arrays.
         print("Loading data...")
         imgsHdrs, targs, fl = self.load_imgs(suffix=self.inputType)
+       
+        sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192 = display_fits_content(file_name, plot_images=True)
+        #TODO: get sci_header, err_header etc.  and target name and file name list and return
+
 
         # Get input image intensity units.
         self.bunit = imgsHdrs[1][0][1]['BUNIT']
@@ -564,14 +676,12 @@ class Pipeline(object):
         sciImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
 
 
-    # ========== FIX BAD PIXELS ========== #
-        # Fix bad pixels iteratively in all images.
-        if not self.noFixPix:
-            intenseROI = 460
-            sciImgs = fix_bad_pix(sciImgs,
-                                  intensify=[int(self.starFromWCS[0])-intenseROI//2,
-                                             int(self.starFromWCS[1])-intenseROI//2,
-                                             intenseROI, intenseROI])
+#bad pixel fixing used to be here, moved it under load images
+        fixedImgs = pixelfixing(self)
+
+#TODO: np.mean all of the images in fits files , array of num (flt files) --> sciImgs
+        sciImgs = np.mean(fixedImgs,axis=0)
+        #sciImgs = meanImages
 
     # ========== CALIBRATE FLUX ========== #
         # Convert intensity to counts per second.
@@ -591,7 +701,7 @@ class Pipeline(object):
             orbitImgs = sciImgs.copy()
 
         # Apply distortion correction if needed (sx2 already corrected/"rectified")
-        if self.inputType not in ['sx2']:
+        if self.inputType not in ['sx2']: #TODO
     # FIX ME!!! Add distortion correction step
             pass
 
