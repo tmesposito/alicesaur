@@ -24,6 +24,7 @@ from alicesaur.calibration.bad_pix import fix_bad_dq_knn
 from alicesaur.calibration.align import find_star_radon, shift_pix_to_pix
 from alicesaur.calibration.flux import convert_intensity
 from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
+from alicesaur.improcess.manipulate import zero_pad
 
 
 class Pipeline(object):
@@ -41,12 +42,12 @@ class Pipeline(object):
     else:
         packageHome = os.path.dirname(pipeline.__path__[0])
 
+    # Default to ingesting flt files as input.
+    inputType = 'flt'
     # Default to STIS instrument.
     instrument = 'stis'
     # Image plate scale.
     pscale = 0.0507 # [arcsec/pixel]
-    occultMaskPath = os.path.join(packageHome, 'masks',
-                                  'mask_stis_occulters_sx2_bar_wedgeB.fits' #WHAT)
 
     def __init__(self, **kwargs):
 
@@ -59,6 +60,13 @@ class Pipeline(object):
             self.dataDir = os.path.join(os.path.expanduser(self.dataDir),'')
         else:
             self.dataDir = None
+
+        # Path to instrument- and filetype-specific occulter mask FITS.
+        if self.instrument == 'stis':
+            self.occultMaskPath = os.path.join(self.packageHome, 'masks',
+                    f'mask_stis_occulters_{self.inputType}_bar_wedgeB.fits')
+        else:
+            self.occultMaskPath = ''
 
         # Load dataset info and reduction parameters from info.json.
         self.load_info_json(self.dataDir)
@@ -359,11 +367,16 @@ class Pipeline(object):
         """
         Combine (nanmean) all images from a single orbit for a given target.
         """
+        self.sciInds_precombine = self.sciInds.copy()
+        self.refInds_precombine = self.refInds.copy()
+        self.allHdrs_precombine = self.allHdrs.copy()
+
         # Maintain the input order of the sci and ref images.
         orientatsUnique, indsUnique = np.unique(orientats, return_index=True)
+        self.indsOrbits = indsUnique # index of first image in each orbit
         sameOrder = np.argsort(indsUnique)
         orientatsUnique = orientatsUnique[sameOrder]
-    
+
         orientatsSci = np.unique(orientats[self.sciInds])
         orientatsRef = np.unique(orientats[self.refInds])
 
@@ -371,6 +384,12 @@ class Pipeline(object):
         refIndsNew = np.array([np.where(orientatsUnique == oo)[0][0] for oo in orientatsRef])
         self.sciInds = sciIndsNew
         self.refInds = refIndsNew
+        # Reset the header list as well.
+# FIX ME!!! Do better to combine headers after the orbit combination.
+# Right now, we just take the first header of each orbit.
+        self.sciHdrs = [self.allHdrs[ind] for ind in indsUnique[self.sciInds]]
+        self.refHdrs = [self.allHdrs[ind] for ind in indsUnique[self.refInds]]
+        self.allHdrs = [self.allHdrs[ind] for ind in indsUnique]
 
         combineImgs = np.zeros((len(orientatsSci) + len(orientatsRef), imgs.shape[1], imgs.shape[2]))
 
@@ -458,6 +477,44 @@ class Pipeline(object):
 
         return
 
+    def update_dimensions(self, imgs, hdrs):
+        """
+        Update header array dimensions given image arrays.
+        """
+        for ii, im in enumerate(imgs):
+            for jj, hdr in enumerate(hdrs[ii]):
+                if 'NAXIS1' in hdr.keys():
+                    hdrs[ii][jj]['NAXIS1'] = im.shape[1] # x
+                    hdrs[ii][jj]['NAXIS2'] = im.shape[0] # y
+
+        return hdrs
+
+    def update_wcs(self, imgs):
+        """
+        Update header WCS reference coordinates and array dimensions given
+        image arrays and taking self.stars coordinates.
+        """
+        for ii in self.sciInds:
+            for jj, hdr in enumerate(self.allHdrs[ii]):
+                if 'CRPIX1' in hdr.keys():
+                    self.allHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
+                    self.allHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
+                if 'NAXIS1' in hdr.keys():
+                    self.allHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
+                    self.allHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
+        for ii in self.refInds:
+            for jj, hdr in enumerate(self.allHdrs[ii]):
+                if 'CRPIX1' in hdr.keys():
+                    self.allHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
+                    self.allHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
+                if 'NAXIS1' in hdr.keys():
+                    self.allHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
+                    self.allHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
+
+        self.sciHdrs = [self.allHdrs[ind] for ind in self.sciInds]
+        self.refHdrs = [self.allHdrs[ind] for ind in self.refInds]
+
+        return
 
     def derotate(self, imgs, orientats, cens):
     
@@ -478,12 +535,12 @@ class Pipeline(object):
         """
 
         if unit in ['Jy', 'Jy arcsec-2', 'mJy', 'mJy arcsec-2']:
-            saveName = f"{imType}_{self.targ}_{self.obsDate}_stis_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}_{unit.replace(' ', '_')}.fits"
+            saveName = f"{imType}_{self.targ}_{self.obsDate}_{self.instrument}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}_{unit.replace(' ', '_')}.fits"
             # saveName = "{}_{}_stis_{}_{}_a{}_{}_{}.fits".format(targ, obsDate,
             #                                 propAper, psfSubMode.lower(), ann,
             #                                 imType, newUnit.replace(' ', '_'))
         else:
-            saveName = f"{imType}_{self.targ}_{self.obsDate}_stis_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}.fits"
+            saveName = f"{imType}_{self.targ}_{self.obsDate}_{self.instrument}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}.fits"
             # saveName = "{}_{}_stis_{}_{}_a{}_final.fits".format(targ, obsDate,
             #                                 propAper, psfSubMode.lower(), ann)
 
@@ -575,13 +632,9 @@ class Pipeline(object):
         """
 
 # TEMP!!! Clean this up later to just use the self attributes directly.
-        dataDir = self.dataDir
         obsMode = self.obsMode
         targ = self.targ
         ann = self.ann
-# FIX ME!!! Convert self.inputType to input arg.
-        #self.inputType = 'sx2'
-        self.inputType = 'flt'
         psfSubMode = self.psfSubMode
         noCombine = self.noCombine
         pad = not self.noPad
@@ -609,7 +662,6 @@ class Pipeline(object):
         if self.spWidth is None:
             self.spWidth = self.info[self.obsMode]['spWidth'] # diffraction spike mask width [pix]
         self.radonIWA = self.info[self.obsMode]['radonIWA']
-        radonIWA = self.radonIWA
         exclusions = self.info[self.obsMode]['exclude'] # masked region definitions
         exclusionsSci = self.exclusionsSci # science masking
         sub_r_in = self.exclusionsSci['r_in'] # PSF subtraction inner radius
@@ -637,9 +689,6 @@ class Pipeline(object):
         # Number of input science and reference frames (before any combinations)
         self.nSci = np.size(self.sciInds)
         self.nRef = np.size(self.refInds)
-        # Split out science headers for later convenience.
-        self.sciHdrs = [imgsHdrs[1][ii] for ii in self.sciInds]
-        self.refHdrs = [imgsHdrs[1][ii] for ii in self.refInds]
 
         print("\nScience image indices: {}".format(self.sciInds))
         print("Ref image indices ({}): {}\n".format(targs[self.refInds], self.refInds))
@@ -654,6 +703,22 @@ class Pipeline(object):
 
         self.exptimes_s = [imgsHdrs[1][ii][0].get('TEXPTIME', -1) for ii in self.sciInds] # [s]
         self.photflam_avg = np.mean([imgsHdrs[1][ii][0].get('PHOTFLAM', -1.) for ii in self.sciInds])
+
+        # Zero-pad images to uniform dimensions, depending on instrument.
+        if self.instrument == 'stis':
+            outsize = np.array([1100, 1100])
+            for ii in range(len(imgsHdrs[0])):
+                im = imgsHdrs[0][ii][1]
+                if im.shape != tuple(outsize):
+                    imgsHdrs[0][ii][1] = zero_pad(im, outsize=outsize,
+                                                  method='simple')
+                    for jj, hdr in enumerate(imgsHdrs[1][ii]):
+                        if 'CRPIX1' in hdr.keys():
+                            imgsHdrs[1][ii][jj]['CRPIX1'] += (outsize[1] - im.shape[1])//2 # x
+                            imgsHdrs[1][ii][jj]['CRPIX2'] += (outsize[0] - im.shape[0])//2 # y
+            # Update header image dimensions and WCS reference coordinates.
+            imgsHdrs[1] = self.update_dimensions([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))],
+                                                  imgsHdrs[1])
 
         # Either force star position or estimate based on headers.
         if self.forceStar:
@@ -675,6 +740,10 @@ class Pipeline(object):
         # Separate images into their own 3-d array. Includes Sci and Ref images.
         sciImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
 
+        # Split out science headers for later convenience.
+        self.allHdrs = imgsHdrs[1]
+        self.sciHdrs = [imgsHdrs[1][ii] for ii in self.sciInds]
+        self.refHdrs = [imgsHdrs[1][ii] for ii in self.refInds]
 
 #bad pixel fixing used to be here, moved it under load images
         fixedImgs = pixelfixing(self)
@@ -770,6 +839,8 @@ class Pipeline(object):
                             'HD-114082', 'HD-115600', 'HD-117214',
                             'HD-129590', 'HD-145560', 'HD-146897']
 
+        # Update header WCS reference coordinates and image dimensions.
+        self.update_wcs(alignImgs)
 
     # ==== BACKGROUND SUBTRACTION ==== #
 
