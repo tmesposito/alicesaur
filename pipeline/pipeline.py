@@ -157,7 +157,7 @@ class Pipeline(object):
         return
 
 
-    def load_imgs(self, suffix='sx2'):
+    def load_imgs(self, suffix='flt'):
         """
         List of arrays containing data [0] and headers [1].
 
@@ -178,8 +178,9 @@ class Pipeline(object):
 
         if suffix == 'flt':
 # FIX ME!!! Need to move display_fits_content function into here.
-            pass
-
+            display_fits_content(self, fl, plot_images=False)
+           
+        '''
         elif suffix == 'sx2':
             for ii, ff in enumerate(fl):
                 with fits.open(ff) as hdu:
@@ -192,8 +193,8 @@ class Pipeline(object):
         return imgsHdrs, np.array(targs), fl
 
      #for flt files 
-     #if (suffix='flt')
-
+     #if (suffix='flt') '''
+'''
     def display_fits_content(self, file_name, plot_images=False):
         sci_data, err_data, dq_data = [], [], []
         sci_headers, err_headers, dq_headers = [], [], []
@@ -236,7 +237,51 @@ class Pipeline(object):
             dq_bool_8192 = dq_data == 8192
     
         return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, err_headers, dq_headers, target_name, file_names
+        '''
 
+    def display_fits_content(self, file_names, plot_images=False):
+        sci_data, err_data, dq_data = [], [], []
+        sci_headers, err_headers, dq_headers = [], [], []
+        dq_bool_16 = dq_bool_8192 = None  # Initialize to None
+        target_names = []
+
+        for file_name in file_names:
+            with fits.open(file_name) as hdu_list:
+                for hdu in hdu_list:
+                    print("Header:")
+                    print(repr(hdu.header))
+                    print("\nData:")
+                    print(hdu.data)
+
+                    if 'SCI' in hdu.header.get('EXTNAME', ''):
+                        sci_data.append(hdu.data)
+                        sci_headers.append(hdu.header)
+                    elif 'ERR' in hdu.header.get('EXTNAME', ''):
+                        err_data.append(hdu.data)
+                        err_headers.append(hdu.header)
+                    elif 'DQ' in hdu.header.get('EXTNAME', ''):
+                        dq_data.append(hdu.data)
+                        dq_headers.append(hdu.header)
+
+                    if 'TARGNAME' in hdu.header:
+                        target_names.append(hdu.header['TARGNAME'])
+
+                    if plot_images and hdu.data is not None and hdu.is_image:
+                        plt.imshow(hdu.data, cmap='gray',norm=SymLogNorm(vmin=0.01, vmax=100, linthresh = 0.01))
+                        plt.colorbar()
+                        plt.title('HDU: ' + hdu.header.get('EXTNAME', 'N/A'))
+                        plt.show()
+
+        sci_data = np.array(sci_data)
+        err_data = np.array(err_data)
+        dq_data = np.array(dq_data)
+        
+        if dq_data.size > 0:
+            dq_bool_16 = dq_data == 16
+            dq_bool_8192 = dq_data == 8192
+
+        return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, err_headers, dq_headers, target_names
+       
     def pixelfixing(self):
             # ========== FIX BAD PIXELS ========== #
         # Fix bad pixels iteratively in all images.
@@ -680,9 +725,11 @@ class Pipeline(object):
         print("Loading data...")
         imgsHdrs, targs, fl = self.load_imgs(suffix=self.inputType)
 
-        sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, \
-            err_headers, dq_headers, target_name, file_names = self.display_fits_content(fl[0], plot_images=True)
+        sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, 
+            err_headers, dq_headers, target_name, file_names = self.display_fits_content(fl, plot_images=True)
         #TODO: get sci_header, err_header etc.  and target name and file name list and return
+        fixedImgs = self.pixelfixing()
+        sciImgs = np.mean(fixedImgs,axis=0)
 
 
         # Get input image intensity units.
@@ -751,10 +798,10 @@ class Pipeline(object):
         self.refHdrs = [imgsHdrs[1][ii] for ii in self.refInds]
 
 #bad pixel fixing used to be here, moved it under load images
-        fixedImgs = self.pixelfixing()
+        #fixedImgs = self.pixelfixing()
 
 #TODO: np.mean all of the images in fits files , array of num (flt files) --> sciImgs
-        sciImgs = np.mean(fixedImgs,axis=0)
+        #sciImgs = np.mean(fixedImgs,axis=0)
         #sciImgs = meanImages
 
     # ========== CALIBRATE FLUX ========== #
