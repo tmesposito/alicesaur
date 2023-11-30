@@ -3,6 +3,7 @@
 import pdb
 import numpy as np
 from scipy.ndimage import median_filter, generic_filter
+from scipy.spatial import cKDTree
 
 # Internal imports
 from alicesaur import utils
@@ -538,10 +539,11 @@ def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True):
 
     # Flatten the image for easier access to pixel values
     flat_im = im.ravel()
-    num_bad_pixels = np.sum(dq_mask)
+    num_bad_pixels_0 = np.sum(dq_mask)
+    num_bad_pixels_i = np.sum(dq_mask)
 
     it = 0
-    while num_bad_pixels > 0 and iterate:
+    while num_bad_pixels_i > 0 and iterate:
         # Generate a list of coordinates for the bad pixels
         bad_coords = np.array(np.where(dq_mask)).T
 
@@ -555,10 +557,10 @@ def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True):
         # Update the image and data quality mask
         im = flat_im.reshape(im.shape)
         dq_mask = ~np.isfinite(im)
-        8192
-        num_bad_pixels = np.sum(dq_mask)
+        num_bad_pixels_i = np.sum(dq_mask)
 
-        print(f"Iter {it}: {num_bad_pixels} bad pixels fixed")
+        print(f"Iter {it}: {num_bad_pixels_0 - num_bad_pixels_i} bad pixels fixed")
+        num_bad_pixels_0 = num_bad_pixels_i
         it += 1
 
     return im

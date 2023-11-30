@@ -63,8 +63,9 @@ class Pipeline(object):
 
         # Path to instrument- and filetype-specific occulter mask FITS.
         if self.instrument == 'stis':
+# FIX ME!!! Tailor occulter masks to flt and sx2 files separately???
             self.occultMaskPath = os.path.join(self.packageHome, 'masks',
-                    f'mask_stis_occulters_{self.inputType}_bar_wedgeB.fits')
+                    f'mask_stis_occulters_sx2_bar_wedgeB.fits')
         else:
             self.occultMaskPath = ''
 
@@ -177,10 +178,7 @@ class Pipeline(object):
             print("HELP!!! No FITS files found at {}".format(self.dataDir + '*_{}.fits*'.format(suffix)))
 
         if suffix == 'flt':
-# FIX ME!!! Need to move display_fits_content function into here.
-            display_fits_content(self, fl, plot_images=False)
-           
-        '''
+            pass
         elif suffix == 'sx2':
             for ii, ff in enumerate(fl):
                 with fits.open(ff) as hdu:
@@ -192,79 +190,40 @@ class Pipeline(object):
 
         return imgsHdrs, np.array(targs), fl
 
-     #for flt files 
-     #if (suffix='flt') '''
-'''
-    def display_fits_content(self, file_name, plot_images=False):
-        sci_data, err_data, dq_data = [], [], []
-        sci_headers, err_headers, dq_headers = [], [], []
-        dq_bool_16 = dq_bool_8192 = None  # Initialize to None
-        target_name = None
-        file_names = []
-    
-        with fits.open(file_name) as hdu_list:
-            file_names.append(file_name)
-            for hdu in hdu_list:
-                print("Header:")
-                print(repr(hdu.header))
-                print("\nData:")
-                print(hdu.data)
-    
-                if 'SCI' in hdu.header.get('EXTNAME', ''):
-                    sci_data.append(hdu.data)
-                    sci_headers.append(hdu.header)
-                elif 'ERR' in hdu.header.get('EXTNAME', ''):
-                    err_data.append(hdu.data)
-                    err_headers.append(hdu.header)
-                elif 'DQ' in hdu.header.get('EXTNAME', ''):
-                    dq_data.append(hdu.data)
-                    dq_headers.append(hdu.header)
-    
-                if 'TARGNAME' in hdu.header:
-                    target_name = hdu.header['TARGNAME']
-    
-                if plot_images and hdu.data is not None and hdu.is_image:
-                    plt.imshow(hdu.data, cmap='gray',norm=SymLogNorm(vmin=0.01, vmax=100, linthresh = 0.01))
-                    plt.colorbar()
-                    plt.title('HDU: ' + hdu.header.get('EXTNAME', 'N/A'))
-                    plt.show()
-        sci_data = np.array(sci_data)
-        err_data = np.array(err_data)
-        dq_data = np.array(dq_data)
-        
-        if dq_data.size > 0:
-            dq_bool_16 = dq_data == 16
-            dq_bool_8192 = dq_data == 8192
-    
-        return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, err_headers, dq_headers, target_name, file_names
-        '''
 
-    def display_fits_content(self, file_names, plot_images=False):
+    def load_flt_imgs(self, file_names, plot_images=False):
+        """
+        Load and organize extensions of 'flt' FITS files.
+        """
         sci_data, err_data, dq_data = [], [], []
         sci_headers, err_headers, dq_headers = [], [], []
-        dq_bool_16 = dq_bool_8192 = None  # Initialize to None
+        dq_bool_16 = None
+        dq_bool_8192 = None
         target_names = []
 
         for file_name in file_names:
+            crsplits_sci = []
+            crsplits_hdrs_sci = []
+            crsplits_err = []
+            crsplits_hdrs_err = []
+            crsplits_dq = []
+            crsplits_hdrs_dq = []
             with fits.open(file_name) as hdu_list:
-                for hdu in hdu_list:
-                    print("Header:")
-                    print(repr(hdu.header))
-                    print("\nData:")
-                    print(hdu.data)
+                for ii, hdu in enumerate(hdu_list):
 
                     if 'SCI' in hdu.header.get('EXTNAME', ''):
-                        sci_data.append(hdu.data)
-                        sci_headers.append(hdu.header)
+                        crsplits_sci.append(hdu.data)
+                        crsplits_hdrs_sci.append(hdu.header)
                     elif 'ERR' in hdu.header.get('EXTNAME', ''):
-                        err_data.append(hdu.data)
-                        err_headers.append(hdu.header)
+                        crsplits_err.append(hdu.data)
+                        crsplits_hdrs_err.append(hdu.header)
                     elif 'DQ' in hdu.header.get('EXTNAME', ''):
-                        dq_data.append(hdu.data)
-                        dq_headers.append(hdu.header)
-
-                    if 'TARGNAME' in hdu.header:
-                        target_names.append(hdu.header['TARGNAME'])
+                        crsplits_dq.append(hdu.data)
+                        crsplits_hdrs_dq.append(hdu.header)
+                    elif hdu.header.get('EXTNAME', None) is None:
+                        base_header = hdu.header.copy()
+                        crsplits_hdrs_sci.append(base_header)
+                        target_names.append(hdu.header.get('TARGNAME', ''))
 
                     if plot_images and hdu.data is not None and hdu.is_image:
                         plt.imshow(hdu.data, cmap='gray',norm=SymLogNorm(vmin=0.01, vmax=100, linthresh = 0.01))
@@ -272,30 +231,51 @@ class Pipeline(object):
                         plt.title('HDU: ' + hdu.header.get('EXTNAME', 'N/A'))
                         plt.show()
 
+            sci_data.append(crsplits_sci)
+            err_data.append(crsplits_err)
+            dq_data.append(crsplits_dq)
+            sci_headers.append(crsplits_hdrs_sci)
+            err_headers.append(crsplits_hdrs_err)
+            dq_headers.append(crsplits_hdrs_dq)
+
         sci_data = np.array(sci_data)
         err_data = np.array(err_data)
         dq_data = np.array(dq_data)
-        
+
+        print(f"\nNumber of CRSPLITS per FITS: {[len(ii) for ii in sci_data]}")
+
         if dq_data.size > 0:
             dq_bool_16 = dq_data == 16
             dq_bool_8192 = dq_data == 8192
 
-        return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, err_headers, dq_headers, target_names
-       
-    def pixelfixing(self):
-            # ========== FIX BAD PIXELS ========== #
-        # Fix bad pixels iteratively in all images.
+            n_dq_16 = np.sum(np.sum(dq_bool_16, axis=3), axis=2)
+            n_dq_8192 = np.sum(np.sum(dq_bool_8192, axis=3), axis=2)
+
+            print(f"\nDQ 16 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_16}")
+            print(f"\nDQ 8192 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_8192}")
+
+        return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, err_headers, dq_headers, np.array(target_names)
+
+
+    def pixelfixing(self, data, dq_masks=[]):
+        """
+        Fix bad pixels iteratively in all images.
+        """
+
+        shape_in = data.shape
+
         if not self.noFixPix:
-            #file_name = 'odxy08040_flt.fits'
-            #sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192 = display_fits_content(file_name, plot_images=True)
-            sciImgs = fix_bad_dq_knn(sci_data, dq_bool_16, k=5, max_distance=np.inf, iterate=True)
-            sciImgs2 = fix_bad_dq_knn(sciImgs, dq_bool_8192, k=5, max_distance=np.inf, iterate=True)
-            return sciImgs2
+            data_fixed = data.copy()
+            for dqm in dq_masks:
+                if data.ndim > 3:
+                    for ii, da in tqdm(enumerate(data_fixed), desc="flt fixed for bad pixels"):
+                        for jj in range(da.shape[0]):
+                            data_fixed[ii][jj] = fix_bad_dq_knn(da[jj],
+                                        dqm[ii][jj], k=5, max_distance=np.inf,
+                                        iterate=True)
+#                sciImgs2 = fix_bad_dq_knn(sciImgs, dq_bool_8192, k=5, max_distance=np.inf, iterate=True)
 
-#example usage        
-#file_name = 'odxy08040_flt.fits'
-#sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192 = display_fits_content(file_name, plot_images=True)
-
+            return data_fixed
 
     
     def summarize_obs(self, suffix='sx2', dsName=None):
@@ -574,7 +554,87 @@ class Pipeline(object):
                                               preserve_nan=True, cval=1))
     
         return np.array(rotImgs)
-    
+
+
+    def save_unified_to_fits(self, data, unit):
+        """
+
+        """
+
+        if unit in ['Jy', 'Jy arcsec-2', 'mJy', 'mJy arcsec-2']:
+            saveName = f"unified_{self.targ}_{self.obsDate}_{self.instrument}_{self.inputType}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}_{unit.replace(' ', '_')}.fits"
+            # saveName = "{}_{}_stis_{}_{}_a{}_{}_{}.fits".format(targ, obsDate,
+            #                                 propAper, psfSubMode.lower(), ann,
+            #                                 imType, newUnit.replace(' ', '_'))
+        else:
+            saveName = f"unified_{self.targ}_{self.obsDate}_{self.instrument}_{self.inputType}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}.fits"
+            # saveName = "{}_{}_stis_{}_{}_a{}_final.fits".format(targ, obsDate,
+            #                                 propAper, psfSubMode.lower(), ann)
+
+        filetype = 'Unified images from combined CRSPLITS'
+        cmt1 = f'{self.inputType} input file type'
+
+        hdu = fits.PrimaryHDU(data=np.array(data).astype('float32'))
+        if not 'HISTORY' in hdu.header:
+            try:
+                hdu.header.add_history('Created by {}'.format(getpass.getuser()))
+            except:
+                hdu.header.add_history('Created by unknown user')
+        hdu.header['TARGNAME'] = (self.targ)
+        hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
+        hdu.header['FILETYPE'] = (filetype)
+        hdu.header['NCOMBINE'] = (self.nSci, 'Number of images combined')
+        hdu.header['INPUTTYP'] = (self.inputType, 'Type of input data')
+        hdu.header['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
+        # hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
+        # hdu.header['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
+        # hdu.header['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
+        # hdu.header['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
+        # hdu.header['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
+        hdu.header['TEXPTIME'] = (np.sum(self.exptimes_s), 'Total combined integration time in s')
+        hdu.header['BUNIT'] = (self.bunit, 'brightness units')
+        hdu.header['PHOTFLAM'] = (self.photflam_avg, 'inverse sensitivity, ergs/s/cm2/Ang per count/s')
+        # Propagate certain keys from individual raw FITS.
+        for key in ['TELESCOP', 'INSTRUME','EQUINOX','RA_TARG', 'DEC_TARG',
+                    'PROPOSID', 'TDATEOBS',
+                    'CCDAMP', 'CCDGAIN', 'CCDOFFST', 'OBSTYPE', 'OBSMODE',
+                    'PHOTMODE', 'SUBARRAY', 'DETECTOR', 'OPT_ELEM',
+                    'APERTURE', 'PROPAPER', 'FILTER', 'APER_FOV',
+                    'CRSPLIT', 'PHOTZPT', 'PHOTPLAM', 'PHOTBW', ]:
+            try:
+                hdu.header[key] = (self.sciHdrs[0][0][key],
+                                   self.sciHdrs[0][0].comments[key])
+            except:
+                print(f"Could not propagate header keyword {key}")
+        # if self.bgCen is not None:
+        #     hdu.header['BGCENTY'] = (self.bgCen[0], 'Science Y center background sample')
+        #     hdu.header['BGCENTX'] = (self.bgCen[1], 'Science X center background sample')
+        # else:
+        #     hdu.header['BGCENTY'] = (None, 'Science Y center background sample')
+        #     hdu.header['BGCENTX'] = (None, 'Science X center background sample')
+        # if self.bgCenRef is not None:
+        #     hdu.header['BGCENTYR'] = (self.bgCenRef[0], 'Reference Y center background sample')
+        #     hdu.header['BGCENTXR'] = (self.bgCenRef[1], 'Reference X center background sample')
+        # else:
+        #     hdu.header['BGCENTYR'] = (None, 'Reference Y center background sample')
+        #     hdu.header['BGCENTXR'] = (None, 'Reference X center background sample')
+        # hdu.header['BGRADIUS'] = (self.bgRadius, 'Radius background sample region (pix)')
+        hdu.header['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
+        # hdu.header['ORBCOMBI'] = (not self.noCombine, 'Stacked images per orbit before PSF sub?')
+        # hdu.header['ANNULI'] = (self.ann, 'Number of subtraction region annuli')
+        # hdu.header['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
+        # hdu.header['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
+        hdu.header.add_comment('Image ORIENTAT angles: '\
+                               + str(self.orientats).replace('\n', ''))
+        hdu.header.add_comment(cmt1)
+        hdu.header.add_comment('Reduction info file: {}'.format(self.infoPath))
+        hdu.header.add_comment(f'Image integration times (s): {self.exptimes_all_s}')
+
+        hdu.writeto(self.dataDir + saveName, overwrite=True)
+        print(f"\n{filetype} saved as {self.dataDir + saveName}")
+
+        return
+
 
     def save_psfsub_to_fits(self, data, imType, unit):
         """
@@ -584,12 +644,12 @@ class Pipeline(object):
         """
 
         if unit in ['Jy', 'Jy arcsec-2', 'mJy', 'mJy arcsec-2']:
-            saveName = f"{imType}_{self.targ}_{self.obsDate}_{self.instrument}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}_{unit.replace(' ', '_')}.fits"
+            saveName = f"{imType}_{self.targ}_{self.obsDate}_{self.instrument}_{self.inputType}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}_{unit.replace(' ', '_')}.fits"
             # saveName = "{}_{}_stis_{}_{}_a{}_{}_{}.fits".format(targ, obsDate,
             #                                 propAper, psfSubMode.lower(), ann,
             #                                 imType, newUnit.replace(' ', '_'))
         else:
-            saveName = f"{imType}_{self.targ}_{self.obsDate}_{self.instrument}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}.fits"
+            saveName = f"{imType}_{self.targ}_{self.obsDate}_{self.instrument}_{self.inputType}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}.fits"
             # saveName = "{}_{}_stis_{}_{}_a{}_final.fits".format(targ, obsDate,
             #                                 propAper, psfSubMode.lower(), ann)
 
@@ -658,7 +718,7 @@ class Pipeline(object):
         hdu.header['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
         hdu.header['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
         hdu.header.add_comment('Constituent image ORIENTAT angles: '\
-                               f'{self.orientats[self.sciInds]}')
+                               + str(self.orientats[self.sciInds]).replace('\n', ''))
         if self.subFinalRadProf and imType in ['final']:
             hdu.header.add_comment('Post-collapse radial profile subtracted')
         hdu.header.add_comment(cmt1)
@@ -668,13 +728,15 @@ class Pipeline(object):
                                    + str(np.round(self.refScaleFactors, 5)).replace('\n', ''))
         except:
             hdu.header.add_comment('PSF-subtraction scale factors for reference images by science image: ' \
-                                   + str(self.refScaleFactors))
+                                   + str(self.refScaleFactors).replace('\n', ''))
         hdu.header.add_comment(f'Constituent image exposure times (s): {self.exptimes_s}')
 
         hdu.writeto(self.dataDir + saveName, overwrite=True)
         print(f"\n{filetype} saved as {self.dataDir + saveName}")
 
-    #move bad pixel UP yo load images
+        return
+
+
     def run(self):
         """
         Run the complete reduction pipeline from start to finish.
@@ -725,12 +787,29 @@ class Pipeline(object):
         print("Loading data...")
         imgsHdrs, targs, fl = self.load_imgs(suffix=self.inputType)
 
-        sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, 
-            err_headers, dq_headers, target_name, file_names = self.display_fits_content(fl, plot_images=True)
-        #TODO: get sci_header, err_header etc.  and target name and file name list and return
-        fixedImgs = self.pixelfixing()
-        sciImgs = np.mean(fixedImgs,axis=0)
+        if self.inputType == 'flt':
+            sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, \
+                err_headers, dq_headers, targs = self.load_flt_imgs(fl, plot_images=False)
 
+            # Fix bad pixels based on data quality flags from FITS.
+            if not self.noFixPix:
+                sci_data = self.pixelfixing(sci_data,
+                                            dq_masks=[dq_bool_16, dq_bool_8192])
+
+# FIX ME!!! Add option here to do background subtraction from the individual CRSPLITS
+            self.bgSubSplits = True
+            if self.bgSubSplits:
+                pass
+
+            # Combine CRSPLITS into one "integrated" image per FITS.
+            # unifiedImgs = np.mean(sci_data, axis=1)
+            unifiedImgs = np.median(sci_data, axis=1)
+
+            for ii in range(sci_data.shape[0]):
+                imgsHdrs[0].append([None, unifiedImgs[ii]])
+                imgsHdrs[1].append(sci_headers[ii])
+
+            del unifiedImgs # don't need this anymore
 
         # Get input image intensity units.
         self.bunit = imgsHdrs[1][0][1]['BUNIT']
@@ -753,6 +832,7 @@ class Pipeline(object):
 # FIX ME!!! Need to fully switch to using the self.orientats attribute.
         orientats = self.orientats
 
+        self.exptimes_all_s = [ii[0].get('TEXPTIME', -1) for ii in imgsHdrs[1]] # [s]
         self.exptimes_s = [imgsHdrs[1][ii][0].get('TEXPTIME', -1) for ii in self.sciInds] # [s]
         self.photflam_avg = np.mean([imgsHdrs[1][ii][0].get('PHOTFLAM', -1.) for ii in self.sciInds])
 
@@ -785,30 +865,28 @@ class Pipeline(object):
                 self.starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
             self.starFromWCS = np.mean(self.starFromWCS_list, axis=0)
 
-        # Check number of images per fits file.
-        nImgsPerFits = [len(imgsHdrs[0][ii]) for ii in range(len(imgsHdrs[0]))]
-        print("Data arrays per fits file: {}".format(nImgsPerFits))
+        # # Check number of images per fits file.
+        # nImgsPerFits = [len(imgsHdrs[0][ii]) for ii in range(len(imgsHdrs[0]))]
+        # print("Data arrays per fits file: {}".format(nImgsPerFits))
 
         # Separate images into their own 3-d array. Includes Sci and Ref images.
-        sciImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
+        allImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
 
         # Split out science headers for later convenience.
         self.allHdrs = imgsHdrs[1]
         self.sciHdrs = [imgsHdrs[1][ii] for ii in self.sciInds]
         self.refHdrs = [imgsHdrs[1][ii] for ii in self.refInds]
 
-#bad pixel fixing used to be here, moved it under load images
-        #fixedImgs = self.pixelfixing()
+        # Optionally output the integrated images as FITS here.
+        if self.saveAuxiliary:
+            self.save_unified_to_fits([ii[1] for ii in imgsHdrs[0]], unit='DN')
 
-#TODO: np.mean all of the images in fits files , array of num (flt files) --> sciImgs
-        #sciImgs = np.mean(fixedImgs,axis=0)
-        #sciImgs = meanImages
 
     # ========== CALIBRATE FLUX ========== #
         # Convert intensity to counts per second.
         newUnit = 'COUNTS S-1'
         # newUnit = 'mJy arcsec-2'
-        sciImgs = convert_intensity(sciImgs, imgsHdrs[1], unitEnd=newUnit,
+        allImgs = convert_intensity(allImgs, imgsHdrs[1], unitEnd=newUnit,
                                     pscale=self.pscale) # [counts/s]
         self.bunit = newUnit
         print("Converted image intensity units to {}".format(newUnit))
@@ -817,9 +895,9 @@ class Pipeline(object):
         # Combine individual exposures in an orbit to make one image.
         # Redefine orientats and indices based on these combined images.
         if (not noCombine) and (psfSubMode.lower() not in ['pyklip-rdi']):
-            orbitImgs, orientats = self.combineOrbitImgs(sciImgs, orientats)
+            orbitImgs, orientats = self.combineOrbitImgs(allImgs, orientats)
         else:
-            orbitImgs = sciImgs.copy()
+            orbitImgs = allImgs.copy()
 
         # Apply distortion correction if needed (sx2 already corrected/"rectified")
         if self.inputType not in ['sx2']: #TODO
@@ -1133,7 +1211,7 @@ class Pipeline(object):
                 highpass=False, pre_sm=None, spWidth=8., ps_spWidth=0., PAadj=0.,
                 parangs=None, aligned_center=self.alignStar[::-1],
                 collapse="mean", prfx=targ,
-                save_psf_cubes=False, save_aligned=False, restored_aligned=None,
+                cubes=False, save_aligned=False, restored_aligned=None,
                 lite=False, do_snmap=False, numthreads=4, sufx='', output=False,
                 compute_correlation=True)
 
