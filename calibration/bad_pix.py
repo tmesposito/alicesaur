@@ -3,6 +3,7 @@
 import pdb
 import numpy as np
 from scipy.ndimage import median_filter, generic_filter
+from scipy.spatial import cKDTree
 
 # Internal imports
 from alicesaur import utils
@@ -497,3 +498,70 @@ def fix_bad_pix(imgs, intensify=False):
     # pdb.set_trace()
 
     return np.array(imgsBadMasked)
+
+
+def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True):
+    """
+    Remove bad pixels by replacing their value with the median of the k nearest neighbor pixels.
+
+    Inputs:
+        im: array
+            Image to fix bad pixels in.
+        dq_mask: array
+            Boolean mask where True indicates a bad pixel.
+        k: int
+            Number of nearest neighbor pixels to consider for fixing each bad pixel.
+        max_distance: float
+            Maximum distance to search for nearest neighbors.
+        iterate: bool, True to iterate until no bad pixels remain.
+
+    Output:
+        numpy array with bad pixels replaced by the median of k nearest neighbors.
+    """
+
+    def median_of_knn(y, x, tree, data, k):
+        # Query the k-nearest neighbors for the bad pixel (y, x)
+        dist, idx = tree.query([y, x], k=k, distance_upper_bound=max_distance)
+        # Take only valid indices within the bounds
+        valid_idx = idx[dist != np.inf]
+        # Return the median value of the valid neighbors
+        return np.median(data[valid_idx])
+
+    # Generate the coordinates of all pixels
+    all_coords = np.indices(im.shape).reshape(2, -1).T
+
+    # Separate coordinates into valid and invalid based on the data quality mask
+    valid_coords = all_coords[~dq_mask.ravel()]
+    valid_values = im[~dq_mask]
+
+    # Build a KDTree once for all the valid pixels
+    tree = cKDTree(valid_coords)
+
+    # Flatten the image for easier access to pixel values
+    flat_im = im.ravel()
+    num_bad_pixels_0 = np.sum(dq_mask)
+    num_bad_pixels_i = np.sum(dq_mask)
+
+    it = 0
+    while num_bad_pixels_i > 0 and iterate:
+        # Generate a list of coordinates for the bad pixels
+        bad_coords = np.array(np.where(dq_mask)).T
+
+        # For each bad pixel, find the median of the k nearest valid neighbors
+        for (y, x) in bad_coords:
+            # Convert 2D coordinates to 1D index
+            idx = np.ravel_multi_index((y, x), im.shape)
+            # Get the median from the k nearest neighbors
+            flat_im[idx] = median_of_knn(y, x, tree, valid_values, k)
+
+        # Update the image and data quality mask
+        im = flat_im.reshape(im.shape)
+        dq_mask = ~np.isfinite(im)
+        num_bad_pixels_i = np.sum(dq_mask)
+
+        print(f"Iter {it}: {num_bad_pixels_0 - num_bad_pixels_i} bad pixels fixed")
+        num_bad_pixels_0 = num_bad_pixels_i
+        it += 1
+
+    return im
+    
