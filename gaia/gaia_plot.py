@@ -3,7 +3,7 @@ from matplotlib import colors, cm
 import numpy as np
 from alicesaur.gaia import gaia_utils
 
-def plot_overview(im, x, y, source_id, exclude_id, outname='overview'):
+def plot_overview(im, x, y, source_id, exclude_id, outname='gaia_overview'):
 
     fig, ax = plt.subplots(1, figsize=(5, 5))
 
@@ -22,14 +22,14 @@ def plot_overview(im, x, y, source_id, exclude_id, outname='overview'):
             marker, mec = 'o', 'green'
 
         ax.plot(x[j], y[j], marker, mec=mec, ms=5, mew=0.5, mfc='None')
-        ax.annotate(str(j), xy=(x[j], y[j]), xycoords='data', color=mec, xytext=(5, 5), textcoords='offset points', fontsize=8)
+        ax.annotate(str(j), xy=(x[j], y[j]), xycoords='data', color=mec, xytext=(4, 4), textcoords='offset points', fontsize=8)
     
     fig.savefig('{}.png'.format(outname), dpi=300, bbox_inches='tight') # TODO: Change to meaningful name
     plt.close('all')
 
     return 0
 
-def plot_fits(data_table, include_indx, px_pos, px_cov, data_stamps, model_stamps, model_fits, samples, lnp, blobs, xoff, yoff, outname='psffits'):
+def plot_fits(data_table, include_indx, px_pos, px_cov, data_stamps, model_stamps, model_fits, samples, lnp, blobs, xoff, yoff, outname='gaia_psffits'):
 
     n_stars = len(include_indx)
     fig, ax = plt.subplots(n_stars, 6, figsize=(12, 2.0*float(n_stars)))
@@ -84,6 +84,7 @@ def plot_fits(data_table, include_indx, px_pos, px_cov, data_stamps, model_stamp
         _ = ax[j][5].annotate(r'$A =$ {:.1f}'.format(model_fits[i].amplitude.value), color=color, xy=(0.05, 0.60), xycoords='axes fraction')
         _ = ax[j][5].annotate(r'$\sigma =$ {:.2f}'.format(model_fits[i].x_stddev.value), xy=(0.05, 0.45), xycoords='axes fraction')
         _ = ax[j][5].annotate(r'FWHM $=$ {:.2f}'.format(model_fits[i].x_stddev.value*2.355), xy=(0.05, 0.30), xycoords='axes fraction')
+        _ = ax[j][5].annotate(f'Stamp {i}', xy=(0.05, 0.15), xycoords='axes fraction')
 
     _ = ax[0][0].set_title('Data')
     _ = ax[0][1].set_title('Data (re-centered)')

@@ -2,6 +2,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from astropy.io import ascii, fits
 import glob, os, shutil
+import pdb
 
 from astropy import units as u
 from astropy import time
@@ -106,6 +107,9 @@ def mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, guess_x, guess_y, guess
     return samples, lnp, [blobs_chi, blobs_pos, blobs_cov]
 
 def calculate_max_radius(hdr):
+    """
+    Output: Maximum search radius in [arcsec].
+    """
 
     # Calculates search radius required to encompass image using the WCS reference position as an origin
 
@@ -119,7 +123,8 @@ def calculate_max_radius(hdr):
 
     return max_sep
 
-def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3', exclude_extra=[]):
+def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
+         exclude_extra=[], im=None, hdr=None, out_dir=None):
 
     '''
     # Function name TBD
@@ -133,18 +138,24 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3', e
 
     '''
 
-    filename = im_path.replace('.fits', '')
+    if im is None:
+        filename = im_path.replace('.fits', '')
 
-    '''
-    Open FITS file
-    '''
+        '''
+        Open FITS file
+        '''
 
-    with fits.open(im_path) as hdu:
-        ## TODO - extension may vary by instrument - not an issue if reading image/header from object
-        im = hdu[0].data
-        hdr = hdu[0].header
+        with fits.open(im_path) as hdu:
+            ## TODO - extension may vary by instrument - not an issue if reading image/header from object
+            im = hdu[0].data
+            hdr = hdu[0].header
+            s = im.shape
+    else:
+        filename = im_path
         s = im.shape
 
+    if out_dir is None:
+        out_dir = os.path.abspath(os.path.curdir)
 
     '''
     Get useful quantities from header
@@ -177,7 +188,16 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3', e
 
     # TODO - add inner radius for search query!
 
-    search_radius = calculate_max_radius(hdr)
+    search_radius = calculate_max_radius(hdr) # [arcsec]
+    # Limit the search radius in case of padded images that are mostly empty.
+    # Maybe move this limiting bit inside calculate_max_radius eventually.
+    if inst.lower() == 'stis':
+        radius_limit = 55. # [arcsec]
+    else:
+        radius_limit = np.inf
+    if search_radius > radius_limit:
+        search_radius = radius_limit
+    print("Retrieving Gaia stars from online database...")
     query = Gaia.cone_search_async(ref_pos, radius=search_radius*u.arcsec)
     data = query.get_results()
 
@@ -218,25 +238,39 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3', e
     '''
 
     for i in range(0, n_stars):
-        if (20 <= x[i] <= s[1]) and (20 <= y[i] <= s[0]):
-            pass
-        else:
+        # Exclude sources near or outside the edges of the image array.
+        if not ((20 <= x[i] <= s[1] - 20) and (20 <= y[i] <= s[0] - 20)):
             exclude_id += [source_id[i]]
+        # Exclude sources centered on masked pixels of the image array.
+        elif np.isnan(im[int(np.round(y[i])), int(np.round(x[i]))]):
+            exclude_id += [source_id[i]]
+        else:
+            pass
 
     '''
     Create an overview figure showing the image and the Gaia sources, symbols indicating which are used
     '''
-    _ = gaia_plot.plot_overview(im, x, y, source_id, exclude_id, outname='overview-{}'.format(filename))
+    _ = gaia_plot.plot_overview(im, x, y, source_id, exclude_id,
+                                outname=os.path.join(out_dir, f'gaia_overview-{filename}'))
 
     '''
     Fit the pixel position of each source
     TODO: Save stamps showing the data, model, and residual, as well as FWHM and amplitude
     '''
     star_errors = None
-    if inst == 'STIS':
+    if inst.lower() == 'stis':
         xoff, yoff = -0.054, -0.047
         xinf, yinf = 0.05, 0.05
-    px_pos, px_cov, data_stamps, model_stamps, model_fits = fit_psf.fit(im, x, y, source_id, exclude_id, star_errors, [xoff, yoff], [xinf, yinf], method='gaussian')
+    elif inst.lower() == 'acs':
+        xoff, yoff = 0., 0.
+        xinf, yinf = 0., 0.
+        print("\n***WARNING: No offsets set for ACS yet")
+    else:
+        xoff, yoff = 0., 0.
+        xinf, yinf = 0., 0.
+    px_pos, px_cov, data_stamps, model_stamps, model_fits = fit_psf.fit(im,
+                                x, y, source_id, exclude_id, star_errors,
+                                [xoff, yoff], [xinf, yinf], method='gaussian')
 
     '''
     TODO: additional filtering here based on peak flux, FWHM
@@ -249,6 +283,7 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3', e
     include_indx = [list(source_id).index(k) for k in include_id] # A list of the indicies for those stars in the `source_id` list
     #_ = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=1000, nburn=250)
 
+    print("Running Gaia MCMC...")
     samples, lnp, blobs = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=100, nburn=25)
 
     # Generate list of chi2, to remove outliers in a second run
@@ -257,17 +292,34 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3', e
     '''
     Posterior distributions for star position, plate scales, and north angle
     '''
-    s = samples.shape
-    final_target_x = samples[s[0]//2:,:,0].flatten()
-    final_target_y = samples[s[0]//2:,:,1].flatten()
-    final_ps_x = samples[s[0]//2:,:,1].flatten()
-    final_ps_y = samples[s[0]//2:,:,2].flatten()
-    final_tn = samples[s[0]//2:,:,3].flatten()
+    sa = samples.shape
+    final_target_x = samples[sa[0]//2:,:,0].flatten()
+    final_target_y = samples[sa[0]//2:,:,1].flatten()
+    final_ps_x = samples[sa[0]//2:,:,2].flatten()
+    final_ps_y = samples[sa[0]//2:,:,3].flatten()
+    final_tn = samples[sa[0]//2:,:,4].flatten()
+
+# FIX ME!!! Organize the results output better.
+    final_x_median = np.nanmedian(final_target_x)
+    final_y_median = np.nanmedian(final_target_y)
+    final_x_std = np.nanstd(final_target_x)
+    final_y_std = np.nanstd(final_target_y)
+    final_ps_x_median = np.nanmedian(final_ps_x)
+    final_ps_y_median = np.nanmedian(final_ps_y)
+    final_ps_x_std = np.nanstd(final_ps_x)
+    final_ps_y_std = np.nanstd(final_ps_y)
+    final_tn_median = np.nanmedian(final_tn)
+    final_tn_std = np.nanstd(final_tn)
 
     '''
     Create gallery plot of each star
     '''
-    _ = gaia_plot.plot_fits(data, include_indx, px_pos, px_cov, data_stamps, model_stamps, model_fits, samples, lnp, blobs, xoff, yoff, outname='psffits-{}'.format(filename))
+    print("Plotting PSF stamps...")
+    _ = gaia_plot.plot_fits(data, include_indx, px_pos, px_cov, data_stamps,
+                            model_stamps, model_fits, samples, lnp, blobs,
+                            xoff, yoff, outname=os.path.join(out_dir, f'gaia_psffits-{filename}'))
+
+    return final_x_median, final_y_median, final_ps_x_median, final_ps_y_median, final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std, final_tn_std
 
 
 if __name__ == '__main__':
