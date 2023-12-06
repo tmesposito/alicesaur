@@ -278,10 +278,14 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                      C0=0., rmin=0, rmax=None, ann=1, orientats=None,
                      radProfPaList=np.array([0.]), radProfPaHW=40,
                      radProfMax=200, radProfMasks=None,
-                     bgCen=None, bgRadius=30, subRadProf=True):
+                     bgCen=None, bgRadius=30, subRadProf=True,
+                     optimize_dither=True):
     """
         C0: initial guess for log10 of scalar multiplier of ref PSF.
         subRadProf: bool, True to subtract a radial profile after main PSF subtraction.
+        optimize_dither: bool, True to optimize PSF subtraction by running a
+            least-squares to minimize PSF residuals while dithering the
+            reference image in X and Y. False to skip this.
     """
     
     def residuals_multi_ref(ps, sci, refs, weightMap=1.):
@@ -438,24 +442,25 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     subImg = sciImgs[ii] - (10**pf[0])*refImgMasked
                     refScaleFactors.append(10**pf[0][0])
 
-                    p0_dither = np.array([0.1, 0.1])
-                    pf_dither = leastsq(dither_residuals, p0_dither,
-                                 args=(img, (10**pf[0][0])*refImgs[0].copy(),
-                                       refMasks[0], np.array([1024., 1024.]),
-                                       True),
-                                 full_output=1, factor=1, epsfcn=0.1)
-                    bestDither = np.array([pf_dither[0][0], pf_dither[0][1]])
+                    if optimize_dither:
+                        p0_dither = np.array([0.1, 0.1])
+                        pf_dither = leastsq(dither_residuals, p0_dither,
+                                     args=(img, (10**pf[0][0])*refImgs[0].copy(),
+                                           refMasks[0], np.array([1024., 1024.]),
+                                           True),
+                                     full_output=1, factor=1, epsfcn=0.1)
+                        bestDither = np.array([pf_dither[0][0], pf_dither[0][1]])
 
-                    # Replace the previous best subtraction with the better one
-                    if not np.all(bestDither == np.array([0,0])):
-                        ditheredRef = dither_image((10**pf[0][0])*refImgs[0],
-                                                   star=np.array([1024., 1024.]),
-                                                   ditherPos=bestDither)
-                        ditheredRefMasked = ditheredRef.copy()
-                        ditheredRefMasked[refMasks[0]] = np.nan
-                        subImg = sciImgs[ii] - ditheredRefMasked
-                        print(f"Updated PSF subtraction with best dither "\
-                              f"{bestDither}")
+                        # Replace the previous best subtraction with the better one
+                        if not np.all(bestDither == np.array([0,0])):
+                            ditheredRef = dither_image((10**pf[0][0])*refImgs[0],
+                                                       star=np.array([1024., 1024.]),
+                                                       ditherPos=bestDither)
+                            ditheredRefMasked = ditheredRef.copy()
+                            ditheredRefMasked[refMasks[0]] = np.nan
+                            subImg = sciImgs[ii] - ditheredRefMasked
+                            print(f"Updated PSF subtraction with best dither "\
+                                  f"{bestDither}")
 
             # Optionally subtract the distant background again.
             if bgCen is not None:
@@ -537,26 +542,26 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     subImg = sciImgs[ii] - np.sum(((10**pf[0].transpose())*refImgsMasked.transpose()).transpose(), axis=0)
                     refScaleFactors.append(10**pf[0])
 
-                p0_dither = np.array([0.1, 0.1])
-                pf_dither = leastsq(dither_residuals, p0_dither,
-                             args=(img,
-                                   np.sum(((10**pf[0].transpose())*refImgs.transpose()).transpose(), axis=0),
-                                   refMasks[0], np.array([1024., 1024.]),
-                                   True),
-                             full_output=1, factor=1, epsfcn=0.1)
-                bestDither = np.array([pf_dither[0][0], pf_dither[0][1]])
+                if optimize_dither:
+                    p0_dither = np.array([0.1, 0.1])
+                    pf_dither = leastsq(dither_residuals, p0_dither,
+                                 args=(img,
+                                       np.sum(((10**pf[0].transpose())*refImgs.transpose()).transpose(), axis=0),
+                                       refMasks[0], np.array([1024., 1024.]),
+                                       True),
+                                 full_output=1, factor=1, epsfcn=0.1)
+                    bestDither = np.array([pf_dither[0][0], pf_dither[0][1]])
 
-                # Replace the previous best subtraction with the better one.
-                if not np.all(bestDither == np.array([0,0])):
-                    ditheredRef = dither_image(np.sum(((10**pf[0].transpose())*refImgs.transpose()).transpose(), axis=0),
-                                               
-                                               star=np.array([1024., 1024.]),
-                                               ditherPos=bestDither)
-                    ditheredRefMasked = ditheredRef.copy()
-                    ditheredRefMasked[refMasks[0]] = np.nan
-                    subImg = sciImgs[ii] - ditheredRefMasked
-                    print(f"Updated PSF subtraction with best dither "\
-                          f"{bestDither}")
+                    # Replace the previous best subtraction with the better one.
+                    if not np.all(bestDither == np.array([0,0])):
+                        ditheredRef = dither_image(np.sum(((10**pf[0].transpose())*refImgs.transpose()).transpose(), axis=0),
+                                                   star=np.array([1024., 1024.]),
+                                                   ditherPos=bestDither)
+                        ditheredRefMasked = ditheredRef.copy()
+                        ditheredRefMasked[refMasks[0]] = np.nan
+                        subImg = sciImgs[ii] - ditheredRefMasked
+                        print(f"Updated PSF subtraction with best dither "\
+                              f"{bestDither}")
 
             # Optionally subtract the distant background again.
             if bgCen is not None:
