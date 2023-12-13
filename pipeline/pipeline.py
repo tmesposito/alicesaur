@@ -15,6 +15,7 @@ from astropy import table
 from astropy import wcs
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import interp1d
+from scipy.stats import median_abs_deviation
 
 # Internal imports
 from alicesaur import pipeline
@@ -257,25 +258,49 @@ class Pipeline(object):
         return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, err_headers, dq_headers, np.array(target_names)
 
 
-    def pixelfixing(self, data, dq_masks=[]):
+    def pixelfixing(self, data, dq_8192_mask=None, dq_masks=[], verbose=False):
         """
         Fix bad pixels iteratively in all images.
         """
 
-        shape_in = data.shape
+        # Number of 8192 flagged pixels in each CRSPLIT.
+        n_dq_8192 = np.sum(np.sum(dq_8192_mask, axis=3), axis=2)
+        med_8192 = np.nanmedian(n_dq_8192)
+        # std_8192 = np.nanstd(n_dq_8192)
 
-        if not self.noFixPix:
-            data_fixed = data.copy()
-            for dqm in dq_masks:
-                if data.ndim > 3:
-                    for ii, da in tqdm(enumerate(data_fixed), desc="flt fixed for bad pixels"):
-                        for jj in range(da.shape[0]):
-                            data_fixed[ii][jj] = fix_bad_dq_knn(da[jj],
-                                        dqm[ii][jj], k=5, max_distance=np.inf,
-                                        iterate=True)
-#                sciImgs2 = fix_bad_dq_knn(sciImgs, dq_bool_8192, k=5, max_distance=np.inf, iterate=True)
+        data_fixed = data.copy()
+        # Fix the DQ=8192 pixels separately.
+        if dq_8192_mask is not None:
+            if data.ndim > 3:
+                for ii, da in tqdm(enumerate(data_fixed), desc="flt fixed for DQ=8192 bad pixels"):
+                    for jj in range(da.shape[0]):
+                        # Check for unusually high number of pixels
+                        # with 8192 DQ flag, which can sometimes be
+                        # wrong from the HST pipeline.
+                        # Do not fix 8192 pixels for those.
+                        if n_dq_8192[ii][jj] > 2*med_8192:
+                            print("Too many pixels with DQ=8192 flag "\
+                                  f"in image {ii}, crsplit {jj}; not fixing them "\
+                                  f"({n_dq_8192[ii][jj]} > {2*med_8192} [2*median])")
+                            continue
+                        data_fixed[ii][jj] = fix_bad_dq_knn(da[jj],
+                                                dq_8192_mask[ii][jj], k=5,
+                                                max_distance=np.inf,
+                                                iterate=True,
+                                                verbose=verbose)
 
-            return data_fixed
+        # Then fix all other DQ flags.
+        for dqm in dq_masks:
+            if data.ndim > 3:
+                for ii, da in tqdm(enumerate(data_fixed), desc="flt fixed for other bad pixels"):
+                    for jj in range(da.shape[0]):
+                        data_fixed[ii][jj] = fix_bad_dq_knn(da[jj],
+                                                dqm[ii][jj], k=5,
+                                                max_distance=np.inf,
+                                                iterate=True,
+                                                verbose=verbose)
+
+        return data_fixed
 
     
     def summarize_obs(self, suffix='sx2', dsName=None):
@@ -793,23 +818,46 @@ class Pipeline(object):
 
             # Fix bad pixels based on data quality flags from FITS.
             if not self.noFixPix:
-                sci_data = self.pixelfixing(sci_data,
-                                            dq_masks=[dq_bool_16, dq_bool_8192])
+                sci_data = self.pixelfixing(sci_data, dq_8192_mask=dq_bool_8192,
+                                            dq_masks=[dq_bool_16],
+                                            verbose=True)
 
 # FIX ME!!! Add option here to do background subtraction from the individual CRSPLITS
             self.bgSubSplits = True
             if self.bgSubSplits:
                 pass
 
+# FIX ME!!! CRSPLIT combination should move to a method eventually.
             # Combine CRSPLITS into one "integrated" image per FITS.
+# TEMP!!! TESTING DIFFERENT CLEANING AND UNIFICATION METHODS.
             # unifiedImgs = np.mean(sci_data, axis=1)
-            unifiedImgs = np.median(sci_data, axis=1)
+            # unifiedImgs = np.median(sci_data, axis=1)
+            yy, xx = np.ogrid[:sci_data[0].shape[1], :sci_data[0].shape[2]]
+            for ii in range(sci_data.shape[0]):
+                # # Clip highest valued pixel in every CRSPLIT stack.
+                # # WARNING: This distorts the bg star shapes -- don't like it
+                # sci_data[ii][np.argmax(sci_data[ii], axis=0), yy, xx] = np.nan
+                # Sigma clip pixels more than 5-sigma discrepant in every CRSPLIT stack.
+                # No pixels actually crossed the 5-sigma threshold in the first
+                # dataset tested (HD 114082 flt wedge).
+                # std = np.nanstd(sci_data[ii], axis=0)
+                # nsigma = np.abs((sci_data[ii] - np.nanmedian(sci_data[ii], axis=0))/std)
+                # median absolute deviation = the median over the absolute
+                # deviations from the median (ignoring NaN)
+                mad = median_abs_deviation(sci_data[ii], axis=0,
+                                           nan_policy='omit')
+                nmad = np.abs((sci_data[ii] - np.nanmedian(sci_data[ii], axis=0))/mad)
+                # sci_data[ii][np.where(nsigma > 5), yy, xx] = np.nan
+                # sci_data[ii][nsigma > 5] = np.nan
+                sci_data[ii][nmad > 5] = np.nan
+            unifiedImgs = np.nanmean(sci_data, axis=1)
 
             for ii in range(sci_data.shape[0]):
                 imgsHdrs[0].append([None, unifiedImgs[ii]])
                 imgsHdrs[1].append(sci_headers[ii])
 
             del unifiedImgs # don't need this anymore
+# TEMP END!!!
 
         # Get input image intensity units.
         self.bunit = imgsHdrs[1][0][1]['BUNIT']
@@ -880,7 +928,6 @@ class Pipeline(object):
         # Optionally output the integrated images as FITS here.
         if self.saveAuxiliary:
             self.save_unified_to_fits([ii[1] for ii in imgsHdrs[0]], unit='DN')
-
 
     # ========== CALIBRATE FLUX ========== #
         # Convert intensity to counts per second.

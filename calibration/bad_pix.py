@@ -169,7 +169,7 @@ def mask_bad_pix(im, inst=None, Nsig=7, neighborDist=5, thr_min=np.inf,
 
 
 def fix_bad_dq(im, dq_mask, inst=None, neighborDist=5,
-               iterate=True, window=False):
+               iterate=True, window=False, verbose=False):
     """
     Remove bad pixels by comparing their value to mean of neighbor pixels.
 
@@ -257,7 +257,7 @@ def fix_bad_dq(im, dq_mask, inst=None, neighborDist=5,
 
         Nbad = np.sum(dq_mask)
 
-        print(f"Iter {it}: {Nbad} bad pixels fixed")
+        if verbose: print(f"Iter {it}: {Nbad} bad pixels fixed")
 
         if not iterate:
             Nbad = 0.
@@ -500,7 +500,8 @@ def fix_bad_pix(imgs, intensify=False):
     return np.array(imgsBadMasked)
 
 
-def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True):
+def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True,
+                   verbose=False):
     """
     Remove bad pixels by replacing their value with the median of the k nearest neighbor pixels.
 
@@ -559,7 +560,7 @@ def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True):
         dq_mask = ~np.isfinite(im)
         num_bad_pixels_i = np.sum(dq_mask)
 
-        print(f"Iter {it}: {num_bad_pixels_0 - num_bad_pixels_i} bad pixels fixed")
+        if verbose: print(f"Iter {it}: {num_bad_pixels_0 - num_bad_pixels_i} bad pixels fixed")
         num_bad_pixels_0 = num_bad_pixels_i
         it += 1
 
