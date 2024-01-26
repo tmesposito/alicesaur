@@ -2,6 +2,7 @@ from matplotlib import pyplot as plt
 from matplotlib import colors, cm
 import numpy as np
 from alicesaur.gaia import gaia_utils
+import corner
 
 def plot_overview(im, x, y, source_id, exclude_id, outname='gaia_overview'):
 
@@ -29,7 +30,10 @@ def plot_overview(im, x, y, source_id, exclude_id, outname='gaia_overview'):
 
     return 0
 
-def plot_fits(data_table, include_indx, px_pos, px_cov, data_stamps, model_stamps, model_fits, samples, lnp, blobs, xoff, yoff, outname='gaia_psffits'):
+def plot_fits(data_table, include_indx, sky_pos, sky_cov, px_pos, px_cov,
+              data_stamps, model_stamps, model_fits, samples, lnp, blobs,
+              final_target_x, final_target_y, final_ps_x, final_ps_y, final_tn,
+              xoff, yoff, outname='gaia_psffits'):
 
     n_stars = len(include_indx)
     fig, ax = plt.subplots(n_stars, 6, figsize=(12, 2.0*float(n_stars)))
@@ -48,18 +52,27 @@ def plot_fits(data_table, include_indx, px_pos, px_cov, data_stamps, model_stamp
         _ = ax[j][2].imshow(model_stamps[i], origin='lower', vmin=vmin, vmax=vmax)
         _ = ax[j][3].imshow(data_stamps[1][i] - model_stamps[i], origin='lower', vmin=vmin, vmax=vmax)
 
-        n_draws = int(1e3)
-        n_use = 25
-        pred_pos = np.zeros((n_use, n_walkers, n_draws, 2))
 
-        for i1 in range(n_steps-n_use, n_steps):
-            for i2 in range(0, n_walkers):
-                pred_pos[i1-(n_steps-n_use), i2] = np.random.multivariate_normal(blobs[1][i1][i2][j], blobs[2][i1][i2][j], n_draws)
+        # TODO - Change to use propagated xi/eta offset and the plate scale/TN chains directly.
+        #n_draws = int(1e3)
+        #n_use = 25
+        #pred_pos = np.zeros((n_use, n_walkers, n_draws, 2))
 
-        pred_x = pred_pos[...,0].flatten()
-        pred_y = pred_pos[...,1].flatten()
-        pred_pos = None
+        #for i1 in range(n_steps-n_use, n_steps):
+        #    for i2 in range(0, n_walkers):
+        #        pred_pos[i1-(n_steps-n_use), i2] = np.random.multivariate_normal(blobs[1][i1][i2][j], blobs[2][i1][i2][j], n_draws)
 
+        #pred_x = pred_pos[...,0].flatten()
+        #pred_y = pred_pos[...,1].flatten()
+        #pred_pos = None
+
+        n_draws = len(final_target_x)
+
+        # This assumes Gaussian uncertainties for the RA/Dec offset at the HST epoch
+        sky_mc = np.random.multivariate_normal(sky_pos[i], sky_cov[i], n_draws)
+
+        pred_x = (1.0/final_ps_x) * (-sky_mc[:, 0]*np.cos(final_tn) + sky_mc[:, 1]*np.sin(final_tn)) + final_target_x
+        pred_y = (1.0/final_ps_y) * (sky_mc[:, 0]*np.sin(final_tn) + sky_mc[:, 1]*np.cos(final_tn)) + final_target_y
         std_x, std_y = np.std(pred_x), np.std(pred_y)
         std = np.max((std_x, std_y)) * 8.0
         xbins = np.linspace(np.mean(pred_x)-std, np.mean(pred_x)+std, 100)
@@ -77,20 +90,42 @@ def plot_fits(data_table, include_indx, px_pos, px_cov, data_stamps, model_stamp
         _ = ax[j][4].yaxis.get_major_formatter().set_useOffset(False)
 
         _ = ax[j][5].annotate('{}'.format(data_table['source_id'][i]), xy=(0.05, 0.9), xycoords='axes fraction', fontsize=6)
-        _ = ax[j][5].annotate(r'$\chi^2_i =$ {:.1f}'.format(blobs[0][min_ind[0]][min_ind[1]][j]), xy=(0.05, 0.75), xycoords='axes fraction')
+        _ = ax[j][5].annotate(r'RUWE $=$ {:.1f}'.format(data_table['ruwe'][i]), xy=(0.05, 0.75), xycoords='axes fraction')
+        _ = ax[j][5].annotate(r'$\chi^2_i =$ {:.1f}'.format(blobs[0][min_ind[0]][min_ind[1]][j]), xy=(0.05, 0.60), xycoords='axes fraction')
         _ = ax[j][5].axis('off')
 
         color = 'k'
-        _ = ax[j][5].annotate(r'$A =$ {:.1f}'.format(model_fits[i].amplitude.value), color=color, xy=(0.05, 0.60), xycoords='axes fraction')
-        _ = ax[j][5].annotate(r'$\sigma =$ {:.2f}'.format(model_fits[i].x_stddev.value), xy=(0.05, 0.45), xycoords='axes fraction')
-        _ = ax[j][5].annotate(r'FWHM $=$ {:.2f}'.format(model_fits[i].x_stddev.value*2.355), xy=(0.05, 0.30), xycoords='axes fraction')
-        _ = ax[j][5].annotate(f'Stamp {i}', xy=(0.05, 0.15), xycoords='axes fraction')
+        _ = ax[j][5].annotate(r'$A =$ {:.1f}'.format(model_fits[i].amplitude.value), color=color, xy=(0.05, 0.45), xycoords='axes fraction')
+        _ = ax[j][5].annotate(r'$\sigma =$ {:.2f}'.format(model_fits[i].x_stddev.value), xy=(0.05, 0.30), xycoords='axes fraction')
+        _ = ax[j][5].annotate(r'FWHM $=$ {:.2f}'.format(model_fits[i].x_stddev.value*2.355), xy=(0.05, 0.15), xycoords='axes fraction')
+        _ = ax[j][0].set_ylabel(f'Star {i}')
 
     _ = ax[0][0].set_title('Data')
     _ = ax[0][1].set_title('Data (re-centered)')
     _ = ax[0][2].set_title('Model')
     _ = ax[0][3].set_title('Residual')
 
+    fig.savefig('{}.png'.format(outname), dpi=300, bbox_inches='tight')
+
+    return 0
+
+def plot_mcmc_chains(samples, nburn, labels, outname):
+
+    nsteps, nwalkers, ndim = samples.shape
+    fig, ax = plt.subplots(ndim, sharex=True, figsize=(5, 8))
+    for i in range(0, ndim):
+        for j in range(0, nwalkers):
+            _ = ax[i].plot(samples[nburn:,j,i], color='k', alpha=0.1, lw=0.5)
+        _ = ax[i].set_ylabel(labels[i])
+    fig.subplots_adjust(hspace=0.02, wspace=0.02)
+    fig.savefig('{}.png'.format(outname), dpi=300, bbox_inches='tight')
+
+    return 0
+
+def plot_mcmc_corner(samples, nburn, labels, outname):
+
+    nsteps, nwalkers, ndim = samples.shape
+    fig = corner.corner(samples[nburn:,:,:].reshape((-1, ndim)), show_titles=True, plot_datapoints=False, labels=labels, bins=50)
     fig.savefig('{}.png'.format(outname), dpi=300, bbox_inches='tight')
 
     return 0

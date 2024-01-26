@@ -74,11 +74,9 @@ def lnprob(p, sky_pos, sky_cov, px_pos, px_cov, include_indx):
 
     return lnp + lnl, blob
 
-def mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, guess_x, guess_y, guess_ps, guess_tn, nsteps=1000, nburn=250):
+def mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, guess_x, guess_y, guess_ps, guess_tn, nsteps=1000, nwalkers=256):
 
-    ndim, nwalkers = 5, 256
-
-    labels = [r'$x_0$', r'$y_0$', r'ps$_x$', r'ps$_y$', r'$\theta$']
+    ndim = 5
     p0 = [guess_x, guess_y, guess_ps, guess_ps, guess_tn % (2.0*np.pi)]
     dp = [1.0, 1.0, 0.1, 0.1, 0.1]
     pos0 = np.zeros((nwalkers, ndim))
@@ -100,13 +98,11 @@ def mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, guess_x, guess_y, guess
     blobs_pos = sampler.get_blobs()[:,:,1*n_stars:3*n_stars].reshape((nsteps, nwalkers, n_stars, 2))
     blobs_cov = sampler.get_blobs()[:,:,3*n_stars:7*n_stars].reshape((nsteps, nwalkers, n_stars, 2, 2))
 
-    print(samples.shape)
-
     sampler.reset()
 
     return samples, lnp, [blobs_chi, blobs_pos, blobs_cov]
 
-def calculate_max_radius(hdr):
+def calculate_max_radius(hdr, im):
     """
     Output: Maximum search radius in [arcsec].
     """
@@ -116,15 +112,20 @@ def calculate_max_radius(hdr):
     ra0, de0 = hdr['CRVAL1'], hdr['CRVAL2']
     x, y = np.meshgrid(np.arange(hdr['NAXIS1']), np.arange(hdr['NAXIS2']))
     w = WCS(hdr)
-    sky = w.pixel_to_world(x, y).flatten()
+    sky = w.pixel_to_world(x, y)#.flatten()
     sep = sky.separation(w.pixel_to_world(hdr['CRPIX1'], hdr['CRPIX2'])).arcsec
 
-    max_sep = np.nanmax(sep) * 1.1
+    # Only consider valid pixels
+    # TODO - use mask array instead of searching for NaNs/zeros?
+    indx = np.where((im == 0.0) | np.isnan(im))
+    sep[indx] = 0.0
+
+    max_sep = np.nanmax(sep) * 1.05
 
     return max_sep
 
 def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
-         exclude_extra=[], im=None, hdr=None, out_dir=None):
+         exclude_extra=[], im=None, hdr=None, out_dir=None, max_ruwe=1e10):
 
     '''
     # Function name TBD
@@ -188,7 +189,8 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
 
     # TODO - add inner radius for search query!
 
-    search_radius = calculate_max_radius(hdr) # [arcsec]
+    search_radius = calculate_max_radius(hdr, im) # [arcsec]
+
     # Limit the search radius in case of padded images that are mostly empty.
     # Maybe move this limiting bit inside calculate_max_radius eventually.
     if inst.lower() == 'stis':
@@ -197,6 +199,7 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
         radius_limit = np.inf
     if search_radius > radius_limit:
         search_radius = radius_limit
+
     print("Retrieving Gaia stars from online database...")
     query = Gaia.cone_search_async(ref_pos, radius=search_radius*u.arcsec)
     data = query.get_results()
@@ -204,8 +207,12 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     # Sanitize the results, remove entries without proper motion and parallax measurements
     indx_good = ~data['parallax'].mask | ~data['pmra'].mask | ~data['pmdec'].mask
     data = data[indx_good]
-    n_stars = len(data)
 
+    # Remove entries with large RUWE
+    indx_good = np.where(data['ruwe'].data <= max_ruwe)[0]
+    data = data[indx_good]
+
+    n_stars = len(data)
     source_id = data['source_id'].data
 
     '''
@@ -224,7 +231,7 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     '''
     # Propagate astrometry and calculate tangent plane offsets relative to target
     dt = t_hst - t_gaia
-    sky_pos, sky_cov = gaia_utils.tangent_plane_offsets(data, t_hst, dt, np.where(source_id == target_id)[0][0], target_rv, n_mc=int(1e3))
+    sky_pos, sky_cov = gaia_utils.tangent_plane_offsets(data, t_hst, dt, np.where(source_id == target_id)[0][0], target_rv, n_mc=int(1e4))
 
     # Compute pixel offsets using guess plate scale and true north angle
     x = (1.0/guess_ps) * (-sky_pos[:, 0]*np.cos(guess_tn) + sky_pos[:, 1]*np.sin(guess_tn)) + target_xy[0]
@@ -238,11 +245,13 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     '''
 
     for i in range(0, n_stars):
+        x_int, y_int = int(np.round(x[i])), int(np.round(y[i]))
         # Exclude sources near or outside the edges of the image array.
         if not ((20 <= x[i] <= s[1] - 20) and (20 <= y[i] <= s[0] - 20)):
             exclude_id += [source_id[i]]
         # Exclude sources centered on masked pixels of the image array.
-        elif np.isnan(im[int(np.round(y[i])), int(np.round(x[i]))]):
+        elif (np.isnan(im[y_int, x_int]) | (im[y_int, x_int] == 0.0)):
+            # TODO - check mask array
             exclude_id += [source_id[i]]
         else:
             pass
@@ -284,20 +293,29 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     #_ = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=1000, nburn=250)
 
     print("Running Gaia MCMC...")
-    samples, lnp, blobs = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=100, nburn=25)
+    nsteps = 100
+    nburn = 25
+
+    samples, lnp, blobs = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=nsteps)
 
     # Generate list of chi2, to remove outliers in a second run
     # Updated star center could be used as input for the second run
 
+    # Plots
+    labels = [r'$x_0 (px)$', r'$y_0 (px)$', r'ps$_x$ (mas/px)', r'ps$_y$ (mas/px)', r'$\theta$ (deg)']
+    samples[:,:,4] *= 180.0/np.pi # This is so lazy
+    _ = gaia_plot.plot_mcmc_chains(samples, nburn, labels, outname=os.path.join(out_dir, f'gaia_mcmc-chains-{filename}'))
+    _ = gaia_plot.plot_mcmc_corner(samples, nburn, labels, outname=os.path.join(out_dir, f'gaia_mcmc-corner-{filename}'))
+    samples[:,:,4] /= 180.0/np.pi
+
     '''
     Posterior distributions for star position, plate scales, and north angle
     '''
-    sa = samples.shape
-    final_target_x = samples[sa[0]//2:,:,0].flatten()
-    final_target_y = samples[sa[0]//2:,:,1].flatten()
-    final_ps_x = samples[sa[0]//2:,:,2].flatten()
-    final_ps_y = samples[sa[0]//2:,:,3].flatten()
-    final_tn = samples[sa[0]//2:,:,4].flatten()
+    final_target_x = samples[nburn:,:,0].flatten()
+    final_target_y = samples[nburn:,:,1].flatten()
+    final_ps_x = samples[nburn:,:,2].flatten()
+    final_ps_y = samples[nburn:,:,3].flatten()
+    final_tn = samples[nburn:,:,4].flatten()
 
 # FIX ME!!! Organize the results output better.
     final_x_median = np.nanmedian(final_target_x)
@@ -315,8 +333,9 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     Create gallery plot of each star
     '''
     print("Plotting PSF stamps...")
-    _ = gaia_plot.plot_fits(data, include_indx, px_pos, px_cov, data_stamps,
+    _ = gaia_plot.plot_fits(data, include_indx, sky_pos, sky_cov, px_pos, px_cov, data_stamps,
                             model_stamps, model_fits, samples, lnp, blobs,
+                            final_target_x, final_target_y, final_ps_x, final_ps_y, final_tn,
                             xoff, yoff, outname=os.path.join(out_dir, f'gaia_psffits-{filename}'))
 
     return final_x_median, final_y_median, final_ps_x_median, final_ps_y_median, final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std, final_tn_std
@@ -325,6 +344,8 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
 if __name__ == '__main__':
     # stars to test exclude_extra:
     # 6072903200423956608 - star 18 behind the wedge
-    main('vi01_1.fits', 'STIS', 6072902994276659200, [12.18, 0.15], [530, 304], gaia_catalogue='DR3', exclude_extra=[])
+    #main('vi01_1.fits', 'STIS', 6072902994276659200, [12.18, 0.15], [530, 304], gaia_catalogue='DR3', exclude_extra=[])
+    main('vi01_1.fits', 'STIS', 6072902994276659200, [12.18, 0.15], [530, 304], gaia_catalogue='DR3',
+        exclude_extra=[6072902994266748800, 6072903200423956608, 6072902994265478400], max_ruwe=1.6)
 
 
