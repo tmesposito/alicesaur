@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import shutil
 import pdb
 import numpy as np
 import matplotlib.pyplot as plt
@@ -543,6 +544,18 @@ def combine_final_fits(fl):
     plt.draw()
 
     fits.writeto('HD-146897_2020-05-20_stis_BAR10_filled.fits', dataFilled)
+
+    return
+
+
+def make_tmp_copy(filePath, suffix='tmp', verbose=True):
+
+    origBase, origExt = os.path.splitext(filePath)
+    tmpPath = os.path.join(origBase + suffix, origExt)
+
+    shutil.copyfile(filePath, tmpPath)
+    if verbose:
+        print(f"Copied tmp file to {tmpPath}")
 
     return
 
