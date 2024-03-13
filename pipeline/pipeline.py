@@ -522,22 +522,10 @@ class Pipeline(object):
                 print("Assuming all stars at {}".format(self.starFromWCS))
             else:
                 print("\nRadon transforming image {}...".format(ii))
-# FIX ME!!! This 106906 block is a kludge specific to Esposito et al. in prep
-# that needs to be removed eventually.
-                # HD 106906 wedgeb1.8 is special case with dithering along
-                # wedge, so handle that here.
-                if (self.targ == 'HD-106906') and (self.obsMode == 'wedgeb1.8'):
-                    stars.append(find_star_radon(imgIter,
-                                        self.starFromWCS_list[ii],
-                                        self.spikeAngles, IWA=self.radonIWA,
-                                        sp_width=20, r_mask=None)) # [pixels] y,x
-                else:
-                    stars.append(find_star_radon(imgIter,
-                                        self.starFromWCS,
-                                        self.spikeAngles, IWA=self.radonIWA,
-                                        sp_width=20, r_mask=None)) # [pixels] y,x
-
-        # self.stars = np.array(stars) # [pixels] y,x
+                stars.append(find_star_radon(imgIter,
+                                    starGuess,
+                                    self.spikeAngles, IWA=self.radonIWA,
+                                    sp_width=20, r_mask=None)) # [pixels] y,x
 
         return np.array(stars)
 
