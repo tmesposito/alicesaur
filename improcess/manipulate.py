@@ -167,8 +167,8 @@ def stack_images(imPaths, errorPaths=[], mode='weightedMean', negToNan=False,
 def zero_pad(data, outsize, method='simple'):
 
     if (data.shape[0] > outsize[0]) or (data.shape[1] > outsize[1]):
-        print("***HELP!!! One or more outsize dimensions {outsize} are" \
-              f"smaller than the input image dimensions {data.shape}. " \
+        print(f"***HELP!!! One or more output dimension {outsize} is" \
+              f" smaller than the input image dimension {data.shape}. " \
               "Cannot zero-pad this image.")
         return data
 
