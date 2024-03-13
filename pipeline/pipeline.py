@@ -2,6 +2,7 @@
 
 import os
 import sys
+import shutil
 import pdb
 import getpass
 import json
@@ -24,8 +25,16 @@ from alicesaur import utils
 from alicesaur.calibration.bad_pix import fix_bad_dq_knn
 from alicesaur.calibration.align import find_star_radon, shift_pix_to_pix
 from alicesaur.calibration.flux import convert_intensity
+from alicesaur.calibration.distortion import correct_distortion
 from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
 from alicesaur.improcess.manipulate import zero_pad
+
+
+# FIX ME!!! Temp legacy information identifying STIS survey datasets that
+# already take image padding into account. TO BE DELETED.
+noOffsetDatasets = ['V-AK-SCO', 'GSC-07396-00759', 'HD-106906', 'HD-111161',
+                    'HD-114082', 'HD-115600', 'HD-117214',
+                    'HD-129590', 'HD-145560', 'HD-146897']
 
 
 class Pipeline(object):
@@ -49,6 +58,8 @@ class Pipeline(object):
     instrument = 'stis'
     # Image plate scale.
     pscale = 0.0507 # [arcsec/pixel]
+    # Image dimensions.
+    imgShape = np.array([1024, 1024]) # [Y,X pixels]
 
     def __init__(self, **kwargs):
 
@@ -72,6 +83,8 @@ class Pipeline(object):
 
         # Load dataset info and reduction parameters from info.json.
         self.load_info_json(self.dataDir)
+
+        self.alignStar = None
 
 
     def load_info_json(self, infoDir):
@@ -159,6 +172,25 @@ class Pipeline(object):
         return
 
 
+    def find_imgs(self, suffix='flt'):
+        """
+        Find paths to all images with the provided suffix in self.dataDir.
+
+        Assign that list of paths to self.fileList attribute.
+
+        """
+        if not os.path.exists(self.dataDir):
+            print("\n!! **Directory {} does not exist ** !!\n".format(self.dataDir))
+            raise OSError
+
+        self.fileList = np.sort(glob(self.dataDir + '*_{}.fits*'.format(suffix)))
+
+        if len(self.fileList) == 0:
+            print(f"HELP!!! No FITS files found at {self.dataDir + '*_' + suffix +'.fits'}")
+
+        return
+
+
     def load_imgs(self, suffix='flt'):
         """
         List of arrays containing data [0] and headers [1].
@@ -166,38 +198,33 @@ class Pipeline(object):
         suffix: str suffix of FITS files to summarize.
         """
 
-
-        if not os.path.exists(self.dataDir):
-            print("\n!! **Directory {} does not exist ** !!\n".format(self.dataDir))
-            raise OSError
-
-        fl = np.sort(glob(self.dataDir + '*_{}.fits*'.format(suffix)))
         imgsHdrs = [[],[]]
         targs = []
 
-        if len(fl) == 0:
-            print("HELP!!! No FITS files found at {}".format(self.dataDir + '*_{}.fits*'.format(suffix)))
+        if len(self.fileList) == 0:
+            print(f"HELP!!! No FITS files found at {self.dataDir + '*_' + suffix +'.fits'}")
 
         if suffix == 'flt':
             pass
         elif suffix == 'sx2':
-            for ii, ff in enumerate(fl):
+            for ii, ff in enumerate(self.fileList):
                 with fits.open(ff) as hdu:
                     imgs = [hdu[jj].data for jj in range(len(hdu))]
                     hdrs = [hdu[jj].header for jj in range(len(hdu))]
                     imgsHdrs[0].append(imgs)
                     imgsHdrs[1].append(hdrs)
                     targs.append(hdrs[0]['TARGNAME'].lower())
+            self.imgShape = np.array(imgsHdrs[0][0][1].shape)
 
-        return imgsHdrs, np.array(targs), fl
+        return imgsHdrs, np.array(targs)
 
 
-    def load_flt_imgs(self, file_names, plot_images=False):
+    def load_flt_imgs(self, file_names, plot_images=False, scienceOnly=False):
         """
         Load and organize extensions of 'flt' FITS files.
         """
         sci_data, err_data, dq_data = [], [], []
-        sci_headers, err_headers, dq_headers = [], [], []
+        all_headers, sci_headers, err_headers, dq_headers = [], [], [], []
         dq_bool_16 = None
         dq_bool_8192 = None
         target_names = []
@@ -209,8 +236,13 @@ class Pipeline(object):
             crsplits_hdrs_err = []
             crsplits_dq = []
             crsplits_hdrs_dq = []
+            crsplits_hdrs_all = []
             with fits.open(file_name) as hdu_list:
                 for ii, hdu in enumerate(hdu_list):
+
+                    # Put all headers into one long list, and then also
+                    # split them up by category.
+                    crsplits_hdrs_all.append(hdu.header)
 
                     if 'SCI' in hdu.header.get('EXTNAME', ''):
                         crsplits_sci.append(hdu.data)
@@ -235,6 +267,7 @@ class Pipeline(object):
             sci_data.append(crsplits_sci)
             err_data.append(crsplits_err)
             dq_data.append(crsplits_dq)
+            all_headers.append(crsplits_hdrs_all)
             sci_headers.append(crsplits_hdrs_sci)
             err_headers.append(crsplits_hdrs_err)
             dq_headers.append(crsplits_hdrs_dq)
@@ -255,7 +288,10 @@ class Pipeline(object):
             print(f"\nDQ 16 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_16}")
             print(f"\nDQ 8192 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_8192}")
 
-        return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, err_headers, dq_headers, np.array(target_names)
+        if scienceOnly:
+            return sci_data, sci_headers, np.array(target_names)
+        else:
+            return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, all_headers, sci_headers, err_headers, dq_headers, np.array(target_names)
 
 
     def pixelfixing(self, data, dq_8192_mask=None, dq_masks=[], verbose=False):
@@ -458,19 +494,25 @@ class Pipeline(object):
         return combineImgs, orientatsUnique
 
 
-    def find_star(self, imgs, mask):
+    def find_star(self, imgs, mask, starGuess=None):
         """
         Locate the target star position in pixel coordinates. The default is to
         use a Radon transform-based algorithm to locate the center of the
         occulted primary star via its diffraction spikes.
+
+        starGuess: array of guessed (y,x) pixel coordinates for the star in
+            the input images. If None, defaults to self.starFromWCS
         """
-        
+
         # Find star.
         stars = []
 
+        if starGuess is None:
+            starGuess = self.starFromWCS
+
         for ii, im in enumerate(imgs):
             # Mask out the occulters before doing the radon transform.
-            imgIter = im + mask
+            imgIter = im # + mask
             imgIter[imgIter < -1e3] = 0.
             # Do a radon transform to find star from diffraction spike pattern.
             # radonIWA = 30 pix generally good for bar10
@@ -495,9 +537,94 @@ class Pipeline(object):
                                         self.spikeAngles, IWA=self.radonIWA,
                                         sp_width=20, r_mask=None)) # [pixels] y,x
 
-        self.stars = np.array(stars) # [pixels] y,x
+        # self.stars = np.array(stars) # [pixels] y,x
 
-        return
+        return np.array(stars)
+
+
+    def align_imgs(self, imgs, indImg, masks=[], commonMask=None, pad=True,
+                   starGuess=None, finalStarYX=None):
+
+        # Find the occulted star's coordinates in every image.
+        stars = self.find_star(imgs, commonMask, starGuess=starGuess)
+
+        # Define new aligned star position.
+        if pad:
+            matSize = np.array([2048, 2048])
+            if finalStarYX is not None:
+                alignStar = np.array(finalStarYX)
+            else:
+                alignStar = matSize//2
+        else:
+            matSize = None
+            if finalStarYX is not None:
+                alignStar = np.array(finalStarYX)
+            else:
+                alignStar = np.round(np.mean(stars, axis=0))
+
+# FIX ME!!! Might be bad to redefine alignStar here.
+        self.alignStar = alignStar
+
+        # Register images to align stars.
+        # Also pad the images to matSize if self.noPad is not set.
+        print("\nAligning images and masks to common star position...")
+        alignImgs = []
+        alignMasks = []
+        for ii in tqdm(range(len(imgs)), desc="Align images"):
+            alignImgs.append(shift_pix_to_pix(imgs[ii], stars[ii],
+                                              finalYX=self.alignStar,
+                                              outputSize=matSize,
+                                              order=3, fill=0.))
+
+        # Align and pad associated mask arrays as well.
+        if commonMask is not None:
+            alignMasks = shift_pix_to_pix(commonMask, stars[ii],
+                                          finalYX=self.alignStar,
+                                          outputSize=matSize,
+                                          order=1, fill=-1e4)
+        else:
+            for ii in tqdm(range(len(masks)), desc="Align masks"):
+                alignMasks.append(shift_pix_to_pix(masks[ii], stars[ii],
+                                                   finalYX=self.alignStar,
+                                                   outputSize=matSize,
+                                                   order=1, fill=-1e4))
+            alignMasks = np.array(alignMasks)
+
+        alignImgs = np.array(alignImgs)
+
+        # Preserve original star positions before overwriting stars with new
+        # aligned position. Keep the offsets around for posterity.
+# FIX ME!!! Better handle the original CRSPLIT star positions.
+        self.starsOriginal = stars.copy()
+        self.stars = np.tile(self.alignStar, (len(imgs), 1))
+        self.alignStarOffsets = self.stars - self.starsOriginal
+
+        # # Make aligned images the working images from now on.
+        # self.workingImgs = alignImgs
+
+        # Update header WCS reference coordinates and image dimensions.
+        self.update_wcs(alignImgs, indImg=indImg)
+
+        return alignImgs, alignMasks
+
+
+    def pad_imgs(self, imgs, outputShape=(1100,1100), fill=0.):
+
+        mat = np.zeros(outputShape)
+        mat += fill
+
+        imgsPadded = []
+        for im in imgs:
+            dimsOrig = im.shape
+            shiftY = (outputShape[0] - dimsOrig[0])//2
+            shiftX = (outputShape[1] - dimsOrig[1])//2
+
+            imgsPadded.append(mat.copy())
+            imgsPadded[-1][shiftY:shiftY + dimsOrig[0],
+                           shiftX:shiftX + dimsOrig[1]] = im
+            breakpoint()
+
+        return np.array(imgsPadded)
 
 
 # FIX ME!!! noOffsetDatasets is a kludge specific to Esposito et al. in prep
@@ -508,8 +635,6 @@ class Pipeline(object):
         """
         bgs = []
         for ii, im in enumerate(self.workingImgs):
-            # Work on a source-masked copy of the aligned image.
-            imBgTmp = im.copy()
             # imBgTmp[sourceMasks[ii]] = np.nan
             # Assume all reference images are taken at the same PA.
             if ii not in self.refInds:
@@ -522,10 +647,19 @@ class Pipeline(object):
             # because bg positions are chosen from the raw images.
             else:
                 bgCenRot = self.bgCenRef + self.alignStarOffsets[ii]
-            imSub, bg = utils.subtract_bg(imBgTmp, bgCenRot, self.bgRadius)
-            # Can't use subtract_bg image output here because it is masked.
-            self.workingImgs[ii] = im - bg
-            bgs.append(bg)
+
+            if self.workingImgs.ndim > 3:
+                for jj in range(self.workingImgs.shape[1]):
+                    # Work on a source-masked copy of the aligned image.
+                    imSub, bg = utils.subtract_bg(im[jj].copy(), bgCenRot, self.bgRadius)
+                    # Can't use subtract_bg image output here because it is masked.
+                    self.workingImgs[ii][jj] = im[jj] - bg
+                    bgs.append(bg)
+            else:
+                imSub, bg = utils.subtract_bg(im.copy(), bgCenRot, self.bgRadius)
+                # Can't use subtract_bg image output here because it is masked.
+                self.workingImgs[ii] = im - bg
+                bgs.append(bg)
 
         self.bgs = np.array(bgs)
 
@@ -543,30 +677,61 @@ class Pipeline(object):
 
         return hdrs
 
-    def update_wcs(self, imgs):
+
+# FIX ME!!! Is setting CRPIX1 and 2 to the new star center the right thing?
+# Should we instead simply shift CRPIX by the same shift applied to the star center?
+    def update_wcs(self, imgs, indImg):
         """
         Update header WCS reference coordinates and array dimensions given
         image arrays and taking self.stars coordinates.
         """
-        for ii in self.sciInds:
-            for jj, hdr in enumerate(self.allHdrs[ii]):
-                if 'CRPIX1' in hdr.keys():
-                    self.allHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
-                    self.allHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
-                if 'NAXIS1' in hdr.keys():
-                    self.allHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
-                    self.allHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
-        for ii in self.refInds:
-            for jj, hdr in enumerate(self.allHdrs[ii]):
-                if 'CRPIX1' in hdr.keys():
-                    self.allHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
-                    self.allHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
-                if 'NAXIS1' in hdr.keys():
-                    self.allHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
-                    self.allHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
 
-        self.sciHdrs = [self.allHdrs[ind] for ind in self.sciInds]
-        self.refHdrs = [self.allHdrs[ind] for ind in self.refInds]
+        if hasattr(self, 'sciInds'):
+            # Select the headers associated to the correct image.
+            hdrs = self.allHdrs[indImg]
+            # Loop over headers for the image.
+            indSplit = 0
+            for ii, hdr in enumerate(hdrs):
+                if ('CRPIX1' in hdr.keys()) and (hdr.get('EXTNAME', '') == 'SCI'):
+                    hdrs[ii]['CRPIX1'] = self.stars[indSplit][1] # x
+                    hdrs[ii]['CRPIX2'] = self.stars[indSplit][0] # y
+                if ('NAXIS1' in hdr.keys()) and (hdr.get('EXTNAME', '') == 'SCI'):
+                    hdrs[ii]['NAXIS1'] = imgs[indSplit].shape[1] # x
+                    hdrs[ii]['NAXIS2'] = imgs[indSplit].shape[0] # y
+
+            self.sciHdrs = [self.allHdrs[ind] for ind in self.sciInds]
+            self.refHdrs = [self.allHdrs[ind] for ind in self.refInds]
+
+            # for ii in self.sciInds:
+            #     for jj, hdr in enumerate(self.allHdrs[ii]):
+            #         if 'CRPIX1' in hdr.keys():
+            #             self.allHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
+            #             self.allHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
+            #         if 'NAXIS1' in hdr.keys():
+            #             self.allHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
+            #             self.allHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
+            # for ii in self.refInds:
+            #     for jj, hdr in enumerate(self.allHdrs[ii]):
+            #         if 'CRPIX1' in hdr.keys():
+            #             self.allHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
+            #             self.allHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
+            #         if 'NAXIS1' in hdr.keys():
+            #             self.allHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
+            #             self.allHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
+
+            # self.sciHdrs = [self.allHdrs[ind] for ind in self.sciInds]
+            # self.refHdrs = [self.allHdrs[ind] for ind in self.refInds]
+
+# FIX ME!!! This 'else' might not work correctly anymore. Check it.
+        else:
+            for ii in range(len(imgs)):
+                for jj, hdr in enumerate(self.allHdrs[ii]):
+                    if 'CRPIX1' in hdr.keys():
+                        self.allHdrs[ii][jj]['CRPIX1'] = self.stars[ii][1] # x
+                        self.allHdrs[ii][jj]['CRPIX2'] = self.stars[ii][0] # y
+                    if 'NAXIS1' in hdr.keys():
+                        self.allHdrs[ii][jj]['NAXIS1'] = imgs[ii].shape[1] # x
+                        self.allHdrs[ii][jj]['NAXIS2'] = imgs[ii].shape[0] # y
 
         return
 
@@ -579,6 +744,244 @@ class Pipeline(object):
                                               preserve_nan=True, cval=1))
     
         return np.array(rotImgs)
+
+
+    def update_fits(self, filePath, newData=None, newHeader=None,
+                    sciOnly=False):
+        """
+
+        """
+
+        with fits.open(filePath, mode='update') as hdul:
+            if newData is not None:
+                if sciOnly:
+                    sciInds = []
+                    for ii in range(len(hdul)):
+                        if hdul[ii].header.get('EXTNAME', '') == 'SCI':
+                            sciInds.append(ii)
+                    for ii in range(len(newData)):
+                        hdul[sciInds[ii]].data = newData[ii].astype(np.float32)
+
+            hdul.flush()
+
+        # if unit in ['Jy', 'Jy arcsec-2', 'mJy', 'mJy arcsec-2']:
+        #     saveName = f"unified_{self.targ}_{self.obsDate}_{self.instrument}_{self.inputType}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}_{unit.replace(' ', '_')}.fits"
+        #     # saveName = "{}_{}_stis_{}_{}_a{}_{}_{}.fits".format(targ, obsDate,
+        #     #                                 propAper, psfSubMode.lower(), ann,
+        #     #                                 imType, newUnit.replace(' ', '_'))
+        # else:
+        #     saveName = f"unified_{self.targ}_{self.obsDate}_{self.instrument}_{self.inputType}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}.fits"
+        #     # saveName = "{}_{}_stis_{}_{}_a{}_final.fits".format(targ, obsDate,
+        #     #                                 propAper, psfSubMode.lower(), ann)
+
+#         # Create primary header.
+#         hdul = fits.HDUList()
+#         if priHdr is not None:
+#             newPriHdr = priHdr.copy()
+#         else:
+#             newPriHdr = None
+#         newPriHdr['FILENAME'] = os.path.basename(filePath)
+#         newPriHdr.add_comment(f'Aligned CRSPLIT images from {self.inputType}.')
+#         hdul.append(fits.PrimaryHDU(header=newPriHdr))
+
+#         # Create headers for all data extensions.
+#         for ii, da in enumerate(data):
+#             bitpix = headers[ii]['BITPIX']
+#             # Enforce data types to stabilize file size.
+#             if bitpix in [8, 16, 32, 64]:
+#                 hdul.append(fits.ImageHDU(data=np.array(da).astype(f'uint{bitpix}'), header=headers[ii].copy()))
+#             else:
+#                 hdul.append(fits.ImageHDU(data=np.array(da).astype('float32'), header=headers[ii].copy()))
+
+# # # FIX ME!!! This n_sci is a small hack to get around the fact that we only
+# # # record starsOriginal for the SCI extensions during alignment.
+# #         # Track which SCI header we are at in the CRSPLIT sequence.
+# #         n_sci = 0
+
+#         # Add the following keys to all headers.
+#         for ii, hdu in enumerate(hdul):
+#             if not 'HISTORY' in hdu.header:
+#                 try:
+#                     hdu.header.add_history('Created by {}'.format(getpass.getuser()))
+#                 except:
+#                     hdu.header.add_history('Created by unknown user')
+#             hdu.header['TARGNAME'] = (newPriHdr.get('TARGNAME', ''))
+#             hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
+#             hdu.header['FILETYPE'] = (filetype)
+#             hdu.header['NCOMBINE'] = (1, 'Number of images combined')
+#             hdu.header['INPUTTYP'] = (self.inputType, 'Type of input data')
+#             hdu.header['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
+
+#             if hdu.header.get('EXTNAME', '') == 'SCI':
+#                 hdu.header['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
+#                 hdu.header['ORBCOMBI'] = (not self.noCombine, 'Stacked images per orbit before PSF sub?')
+#                 hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
+#                 hdu.header['ALIGNED'] = (True, 'Images aligned to PSFCENT?')
+#                 hdu.header['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
+#                 hdu.header['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
+#                 if ii >= 1:
+#                     hdu.header['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded pre-alignment star center Y')
+#                     hdu.header['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded pre-alignment star center X')
+#                     # n_sci += 1
+#                 if 'x' in self.inputType:
+#                     hdu.header['DISTCORR'] = (True, 'Distortion corrected images?')
+#                 else:
+#                     hdu.header['DISTCORR'] = (False, 'Distortion corrected images?')
+#                 # hdu.header['TEXPTIME'] = (np.sum(self.exptimes_s), 'Total combined integration time in s')
+#                 # hdu.header['BUNIT'] = (self.bunit, 'brightness units')
+#                 # hdu.header['PHOTFLAM'] = (self.photflam_avg, 'inverse sensitivity, ergs/s/cm2/Ang per count/s')
+#                 # Propagate certain keys from individual raw FITS.
+#                 # for key in ['TELESCOP', 'INSTRUME', 'EQUINOX', 'RA_TARG', 
+#                 #             'DEC_TARG', 'PROPOSID', 'TDATEOBS',
+#                 #             'CCDAMP', 'CCDGAIN', 'CCDOFFST', 'OBSTYPE', 'OBSMODE',
+#                 #             'PHOTMODE', 'SUBARRAY', 'DETECTOR', 'OPT_ELEM',
+#                 #             'APERTURE', 'PROPAPER', 'FILTER', 'APER_FOV',
+#                 #             'CRSPLIT', 'PHOTFLAM', 'PHOTZPT', 'PHOTPLAM', 'PHOTBW', ]:
+#                 #     try:
+#                 #         hdu.header[key] = (headers[ii][key],
+#                 #                             headers[ii].comments[key])
+#                 #     except:
+#                 #         print(f"Could not propagate header keyword {key}")
+#             # if self.bgCen is not None:
+#             #     hdu.header['BGCENTY'] = (self.bgCen[0], 'Science Y center background sample')
+#             #     hdu.header['BGCENTX'] = (self.bgCen[1], 'Science X center background sample')
+#             # else:
+#             #     hdu.header['BGCENTY'] = (None, 'Science Y center background sample')
+#             #     hdu.header['BGCENTX'] = (None, 'Science X center background sample')
+#             # if self.bgCenRef is not None:
+#             #     hdu.header['BGCENTYR'] = (self.bgCenRef[0], 'Reference Y center background sample')
+#             #     hdu.header['BGCENTXR'] = (self.bgCenRef[1], 'Reference X center background sample')
+#             # else:
+#             #     hdu.header['BGCENTYR'] = (None, 'Reference Y center background sample')
+#             #     hdu.header['BGCENTXR'] = (None, 'Reference X center background sample')
+#             # hdu.header['BGRADIUS'] = (self.bgRadius, 'Radius background sample region (pix)')
+#             # hdu.header['ANNULI'] = (self.ann, 'Number of subtraction region annuli')
+#             # hdu.header['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
+#             # hdu.header['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
+#             # hdu.header.add_comment('Image ORIENTAT angles: '\
+#             #                         + str(self.orientats).replace('\n', ''))
+#             hdu.header.add_comment(cmt1)
+#             hdu.header.add_comment('Reduction info file: {}'.format(self.infoPath))
+#             # hdu.header.add_comment(f'Image integration times (s): {self.exptimes_all_s}')
+
+#         hdul.writeto(filePath, overwrite=True)
+#         print(f"\n{filetype} saved as {filePath}")
+
+        return
+
+
+    def write_aligned_fits(self, data, headers, filePath, priHdr=None):
+        """
+
+        """
+
+        # if unit in ['Jy', 'Jy arcsec-2', 'mJy', 'mJy arcsec-2']:
+        #     saveName = f"unified_{self.targ}_{self.obsDate}_{self.instrument}_{self.inputType}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}_{unit.replace(' ', '_')}.fits"
+        #     # saveName = "{}_{}_stis_{}_{}_a{}_{}_{}.fits".format(targ, obsDate,
+        #     #                                 propAper, psfSubMode.lower(), ann,
+        #     #                                 imType, newUnit.replace(' ', '_'))
+        # else:
+        #     saveName = f"unified_{self.targ}_{self.obsDate}_{self.instrument}_{self.inputType}_{self.propAper}_{self.psfSubMode.lower()}_a{self.ann}.fits"
+        #     # saveName = "{}_{}_stis_{}_{}_a{}_final.fits".format(targ, obsDate,
+        #     #                                 propAper, psfSubMode.lower(), ann)
+
+        filetype = 'Aligned CRSPLIT image cube'
+        cmt1 = f'{self.inputType} input file type'
+
+        # Create primary header.
+        hdul = fits.HDUList()
+        if priHdr is not None:
+            newPriHdr = priHdr.copy()
+        else:
+            newPriHdr = None
+        newPriHdr['FILENAME'] = os.path.basename(filePath)
+        newPriHdr.add_comment(f'Aligned CRSPLIT images from {self.inputType}.')
+        hdul.append(fits.PrimaryHDU(header=newPriHdr))
+
+        # Create headers for all data extensions.
+        for ii, da in enumerate(data):
+            bitpix = headers[ii]['BITPIX']
+            # Enforce data types to stabilize file size.
+            if bitpix in [8, 16, 32, 64]:
+                hdul.append(fits.ImageHDU(data=np.array(da).astype(f'uint{bitpix}'), header=headers[ii].copy()))
+            else:
+                hdul.append(fits.ImageHDU(data=np.array(da).astype('float32'), header=headers[ii].copy()))
+
+# # FIX ME!!! This n_sci is a small hack to get around the fact that we only
+# # record starsOriginal for the SCI extensions during alignment.
+#         # Track which SCI header we are at in the CRSPLIT sequence.
+#         n_sci = 0
+
+        # Add the following keys to all headers.
+        for ii, hdu in enumerate(hdul):
+            if not 'HISTORY' in hdu.header:
+                try:
+                    hdu.header.add_history('Created by {}'.format(getpass.getuser()))
+                except:
+                    hdu.header.add_history('Created by unknown user')
+            hdu.header['TARGNAME'] = (newPriHdr.get('TARGNAME', ''))
+            hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
+            hdu.header['FILETYPE'] = (filetype)
+            hdu.header['NCOMBINE'] = (1, 'Number of images combined')
+            hdu.header['INPUTTYP'] = (self.inputType, 'Type of input data')
+            hdu.header['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
+
+            if hdu.header.get('EXTNAME', '') == 'SCI':
+                hdu.header['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
+                hdu.header['ORBCOMBI'] = (not self.noCombine, 'Stacked images per orbit before PSF sub?')
+                hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
+                hdu.header['ALIGNED'] = (True, 'Images aligned to PSFCENT?')
+                hdu.header['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
+                hdu.header['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
+                if ii >= 1:
+                    hdu.header['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded pre-alignment star center Y')
+                    hdu.header['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded pre-alignment star center X')
+                    # n_sci += 1
+                if 'x' in self.inputType:
+                    hdu.header['DISTCORR'] = (True, 'Distortion corrected images?')
+                else:
+                    hdu.header['DISTCORR'] = (False, 'Distortion corrected images?')
+                # hdu.header['TEXPTIME'] = (np.sum(self.exptimes_s), 'Total combined integration time in s')
+                # hdu.header['BUNIT'] = (self.bunit, 'brightness units')
+                # hdu.header['PHOTFLAM'] = (self.photflam_avg, 'inverse sensitivity, ergs/s/cm2/Ang per count/s')
+                # Propagate certain keys from individual raw FITS.
+                # for key in ['TELESCOP', 'INSTRUME', 'EQUINOX', 'RA_TARG', 
+                #             'DEC_TARG', 'PROPOSID', 'TDATEOBS',
+                #             'CCDAMP', 'CCDGAIN', 'CCDOFFST', 'OBSTYPE', 'OBSMODE',
+                #             'PHOTMODE', 'SUBARRAY', 'DETECTOR', 'OPT_ELEM',
+                #             'APERTURE', 'PROPAPER', 'FILTER', 'APER_FOV',
+                #             'CRSPLIT', 'PHOTFLAM', 'PHOTZPT', 'PHOTPLAM', 'PHOTBW', ]:
+                #     try:
+                #         hdu.header[key] = (headers[ii][key],
+                #                             headers[ii].comments[key])
+                #     except:
+                #         print(f"Could not propagate header keyword {key}")
+            # if self.bgCen is not None:
+            #     hdu.header['BGCENTY'] = (self.bgCen[0], 'Science Y center background sample')
+            #     hdu.header['BGCENTX'] = (self.bgCen[1], 'Science X center background sample')
+            # else:
+            #     hdu.header['BGCENTY'] = (None, 'Science Y center background sample')
+            #     hdu.header['BGCENTX'] = (None, 'Science X center background sample')
+            # if self.bgCenRef is not None:
+            #     hdu.header['BGCENTYR'] = (self.bgCenRef[0], 'Reference Y center background sample')
+            #     hdu.header['BGCENTXR'] = (self.bgCenRef[1], 'Reference X center background sample')
+            # else:
+            #     hdu.header['BGCENTYR'] = (None, 'Reference Y center background sample')
+            #     hdu.header['BGCENTXR'] = (None, 'Reference X center background sample')
+            # hdu.header['BGRADIUS'] = (self.bgRadius, 'Radius background sample region (pix)')
+            # hdu.header['ANNULI'] = (self.ann, 'Number of subtraction region annuli')
+            # hdu.header['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
+            # hdu.header['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
+            # hdu.header.add_comment('Image ORIENTAT angles: '\
+            #                         + str(self.orientats).replace('\n', ''))
+            hdu.header.add_comment(cmt1)
+            hdu.header.add_comment('Reduction info file: {}'.format(self.infoPath))
+            # hdu.header.add_comment(f'Image integration times (s): {self.exptimes_all_s}')
+
+        hdul.writeto(filePath, overwrite=True)
+        print(f"\n{filetype} saved as {filePath}")
+
+        return
 
 
     def save_unified_to_fits(self, data, unit):
@@ -806,15 +1209,77 @@ class Pipeline(object):
         # Load observation log.
         self.load_obs_log(logPath=info.get('obsLogPath'))
 
-        # Load images to be processed.
+        # Find image filepaths in self.dataDir.
+        self.find_imgs(suffix=self.inputType)
+
+    # ========== CHARGE TRANSFER INEFFICIENCY CORRECTION ========== #
+
+# TEMP!!!
+        self.fixCTI = True
+        if self.fixCTI:
+            # Create CTI object instance
+            # cti = CTI()
+            # Correct the flt files, creating new "flc.fits" files
+# FIX ME!!!
+            # Placeholder for the CTI correction.
+            if self.inputType == 'flt':
+                newSuffix = 'flc'
+            elif self.inputType == 'xft':
+                newSuffix = 'xfc'
+            elif self.inputType == 'axt':
+                newSuffix = 'axc'
+            elif self.inputType == 'sx2':
+                newSuffix = 's2c'
+            elif self.inputType in ['flc', 'xfc', 'axc', 's2c']:
+                print(f"\n{self.inputType} images already CTI-corrected; will"\
+                      " not correct them again")
+            else:
+                newSuffix = 'idk'
+
+            if self.inputType in ['flt', 'xft', 'axt', 'sx2']:
+                for pth in self.fileList:
+                    newPth = os.path.join(os.path.dirname(pth),
+                                          os.path.basename(pth).replace(f'_{self.inputType}.',
+                                                                        f'_{newSuffix}.'))
+                    shutil.copyfile(pth, newPth)
+                    print(f"Wrote new CTI-corrected file to {newPth}")
+# FIX ME END!!!
+
+                # Update the inputType.
+                self.inputType = newSuffix
+
+            # Update the image paths based on CTI correction.
+            self.find_imgs(suffix=self.inputType)
+
+    # ========== LOAD IMAGES ========== #
+
         # Returns list where [0] = data from each fits, [1] = headers from each fits.
         # Each item in [0] and [1] is also a list of arrays.
         print("Loading data...")
-        imgsHdrs, targs, fl = self.load_imgs(suffix=self.inputType)
+        imgsHdrs, targs = self.load_imgs(suffix=self.inputType)
 
-        if self.inputType == 'flt':
-            sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, sci_headers, \
-                err_headers, dq_headers, targs = self.load_flt_imgs(fl, plot_images=False)
+        if self.inputType in ['flt', 'flc', 'xft', 'xfc', 'axt', 'axc']:
+            sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, all_headers, sci_headers, \
+                err_headers, dq_headers, targs = self.load_flt_imgs(self.fileList,
+                                                                    plot_images=False,
+                                                                    scienceOnly=False)
+            self.allHdrs = all_headers
+            self.imgShape = np.array(sci_data[0][0].shape)
+            try:
+                for hdr in sci_headers[0]:
+                    if (hdr.get('EXTNAME', '') == 'SCI') and \
+                        ('PSFCENTX' in hdr.keys()) and \
+                        ('PSFCENTY' in hdr.keys()):
+                        self.alignStar = np.array([hdr['PSFCENTY'], hdr['PSFCENTX']])
+                        break
+            except:
+                if self.inputType in ['axt', 'axc']:
+                    print("\nWARNING: Failed to retrieved aligned star "\
+                          "coordinates from FITS header. Images may not be "\
+                          "aligned.\n")
+                self.alignStar = None
+
+    # ========== BAD PIXEL FIXING ========== #
 
             # Fix bad pixels based on data quality flags from FITS.
             if not self.noFixPix:
@@ -822,18 +1287,260 @@ class Pipeline(object):
                                             dq_masks=[dq_bool_16],
                                             verbose=True)
 
-# FIX ME!!! Add option here to do background subtraction from the individual CRSPLITS
-            self.bgSubSplits = True
-            if self.bgSubSplits:
-                pass
+                # Overwrite input FITS cube with the pixel-fixed CRSPLIT images.
+                for ii, fp in enumerate(self.fileList):
+                    self.update_fits(fp, newData=sci_data[ii],
+                                     newHeader=None, sciOnly=True)
+
+        # Load occulter mask from repository file.
+        # Mask out occulting wedges (later replacing with NaN values).
+        if self.instrument == 'stis':
+            occultMask = fits.getdata(self.occultMaskPath)
+        else:
+            print("***HELP!!! Occulter masks are not implemented yet for "\
+                  "instruments other than STIS")
+            occultMask = np.zeros(self.imgShape)
+        occultMask[occultMask < 0] = -1.e4
+
+
+ # FIX ME!!! Move most of this into the data loading method??
+
+        # Define important variable based on header info.
+        # Get input image intensity units.
+        self.bunit = self.allHdrs[0][1]['BUNIT']
+
+        # Separate science frames from PSF reference frames via the target name.
+        self.sciInds = np.where(np.char.lower(targs) == targ.lower())[0]
+        self.refInds = np.where(np.char.lower(targs) != targ.lower())[0]
+        # Number of input science and reference frames (before any combinations)
+        self.nSci = np.size(self.sciInds)
+        self.nRef = np.size(self.refInds)
+
+        print("\nScience image indices: {}".format(self.sciInds))
+        print("Ref image indices ({}): {}\n".format(targs[self.refInds], self.refInds))
+
+        # Get UT observation date, proposed aperture name, orientat angles, and
+        # rough star coordinates from headers.
+        self.obsDate = self.allHdrs[self.sciInds[0]][0]['TDATEOBS'] # [UT]
+        self.propAper = self.allHdrs[self.sciInds[0]][0]['PROPAPER']
+        self.orientats = np.array([hdrs[1]['ORIENTAT'] for hdrs in self.allHdrs])
+# FIX ME!!! Need to fully switch to using the self.orientats attribute.
+        orientats = self.orientats
+
+        self.exptimes_all_s = np.array([hdrs[0].get('TEXPTIME', -1) for hdrs in self.allHdrs]) # [s]
+        self.exptimes_s = np.array(self.exptimes_all_s)[self.sciInds] # SCI exptimes only [s]
+        self.photflam_avg = np.mean([self.allHdrs[ii][0].get('PHOTFLAM', -1.) for ii in self.sciInds]) # SCI exptimes only
+
+
+    # ========== DISTORTION CORRECTION ========== #
+
+        if self.inputType in ['flt', 'flc']:
+            # Update file paths to new distortion-corrected fits files.
+            # Placeholder for the CTI correction.
+            if self.inputType == 'flt':
+                newSuffix = 'xft'
+            elif self.inputType == 'flc':
+                newSuffix = 'xfc'
+            x2dFileList = []
+            for ii in range(len(self.fileList)):
+                x2dPath = os.path.join(os.path.dirname(self.fileList[ii]),
+                                       os.path.basename(self.fileList[ii]).replace(self.inputType, newSuffix))
+                x2dFileList.append(x2dPath)
+
+            # Correct images for distortion and write new x2d.fits files.
+            correct_distortion(self.fileList, outputPaths=x2dFileList,
+                               refDir=None, inst=self.instrument,
+                               overwrite=True)
+
+            self.inputType = newSuffix
+            self.fileList = x2dFileList
+
+            # # Load the distortion-corrected fits as the working images.
+            # sci_data, sci_headers, targs = self.load_flt_imgs(self.fileList,
+            #                                                   plot_images=False,
+            #                                                   scienceOnly=True)
+            # self.allHdrs = sci_headers
+            # self.imgShape = np.array(sci_data[0][0].shape)
+
+            sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, all_headers, sci_headers, \
+                err_headers, dq_headers, targs = self.load_flt_imgs(self.fileList,
+                                                                    plot_images=False,
+                                                                    scienceOnly=False)
+            self.allHdrs = all_headers
+            self.imgShape = np.array(sci_data[0][0].shape)
+
+
+    # ========== IMAGE ALIGNMENT (REGISTRATION) ========== #
+
+# FIX ME!!! Could move this inside find_star.
+        # Estimate star position based on headers or force it with input.
+        if self.forceStar:
+            self.starFromWCS = self.starToUse
+        else:
+            self.starFromWCS_list = []
+            if self.inputType in ['flt', 'flc', 'xft', 'xfc']:
+                for ii in range(len(sci_headers)):
+                    priHdr = sci_headers[ii][0]
+                    targRA = priHdr['RA_TARG']
+                    targDec = priHdr['DEC_TARG']
+                    starFromWCS_flt = []
+                    for jj, hdr in enumerate(sci_headers[ii][1:]):
+                        ww = wcs.WCS(hdr)
+                        starFromWCS_flt.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
+                    self.starFromWCS_list.append(np.mean(starFromWCS_flt, axis=0))
+            else:
+                for ii, hdr in enumerate(imgsHdrs[1]):
+                    # Get estimate of star position from target RA/Dec and WCS in header.
+                    ww = wcs.WCS(hdr[1])
+                    targRA = hdr[0]['RA_TARG']
+                    targDec = hdr[0]['DEC_TARG']
+                    self.starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
+            self.starFromWCS = np.mean(self.starFromWCS_list, axis=0)
+
+# FIX ME!!! The following alignment only aligns the SCI extensions of the
+# FITS cubes. This means the ERR and DQ arrays become out of alignment with
+# the science images after this stage.
+
+        # # Define common star center based on WCS estimate.
+        # # This is the point to which all images will be aligned.
+        # self.alignStar = np.round(self.starFromWCS, 0)
+
+        # Align CRSPLIT exposures, if they are present.
+        # Write aligned images to new alc.fits (if CTI-corrected) or alt.fits
+        # files (if not CTI-corrected).
+        self.starsAll = []
+        self.starsOriginalAll = []
+        self.alignStarOffsetsAll = []
+        alignMasksAll = []
+        if self.inputType in ['flt', 'flc', 'xft', 'xfc']:
+            for ii in range(sci_data.shape[0]):
+                # imgsPadded = self.pad_imgs(sci_data[ii], outputShape=(1100,1100), fill=0.)
+
+                alignImgs, alignMasks = self.align_imgs(sci_data[ii],
+                                                    indImg=ii, masks=[],
+                                                    commonMask=occultMask,
+                                                    pad=True,
+                                                    starGuess=self.starFromWCS_list[ii],
+                                                    finalStarYX=np.array([1024., 1024.]))
+                alignMasksAll.append(alignMasks.copy())
+                self.starsAll.append(self.stars)
+                self.starsOriginalAll.append(self.starsOriginal)
+                self.alignStarOffsetsAll.append(self.alignStarOffsets)
+
+                # Placeholder for the CTI correction.
+                if self.inputType == 'flt':
+                    newSuffix = 'aft'
+                elif self.inputType == 'flc':
+                    newSuffix = 'afc'
+                elif self.inputType == 'xft':
+                    newSuffix = 'axt'
+                elif self.inputType == 'xfc':
+                    newSuffix = 'axc'
+                outPath = os.path.join(os.path.dirname(self.fileList[ii]),
+                                       os.path.basename(self.fileList[ii]).replace(self.inputType, newSuffix))
+
+                # # Reassemble aligned CRSPLIT images into a new cube with same
+                # # extensions as an flt.
+                # self.write_aligned_fits(list(sum(list(zip(sci_data[ii], err_data[ii], dq_data[ii])), ())),
+                #                         headers=list(sum(list(zip(sci_headers[ii][1:], err_headers[ii], dq_headers[ii])), ())),
+                #                         filePath=outPath,
+                #                         priHdr=sci_headers[ii][0])
+                # Assembled aligned CRSPLIT images into a new cube with only
+                # the science extensions.
+                # Isolate the SCI extension headers first.
+                aligned_sci_headers = []
+                for hdr in self.allHdrs[ii]:
+                    if hdr.get('EXTNAME') == 'SCI':
+                        aligned_sci_headers.append(hdr)
+                self.write_aligned_fits(alignImgs, headers=aligned_sci_headers,
+                                        filePath=outPath,
+                                        priHdr=self.allHdrs[ii][0])
+                # Update the file path and inputType to the new aligned FITS cube.
+                self.fileList[ii] = outPath
+
+            alignMasks = np.array(alignMasksAll)
+            self.stars = np.mean(self.starsAll, axis=1)
+            self.starsOriginal = np.mean(self.starsOriginalAll, axis=1)
+            self.alignStarOffsets = np.mean(self.alignStarOffsetsAll, axis=1)
+
+            self.inputType = newSuffix
+
+# FIX ME!!! We can avoid loading from file again here, since the aligned
+# images are stored in memory.
+            sci_data, sci_headers, targs = self.load_flt_imgs(self.fileList,
+                                                              plot_images=False,
+                                                              scienceOnly=True)
+            self.imgShape = np.array(sci_data[0][0].shape)
+            self.workingImgs = sci_data
+
+        else:
+            self.workingImgs = sci_data
+            self.stars = np.tile(self.alignStar, (sci_data.shape[0], 1))
+            self.starsOriginal = []
+            for hdrs in self.allHdrs:
+                self.starsOriginal.append(np.array([hdrs[1]['ORIGCENY'], hdrs[1]['ORIGCENX']]))
+            self.starsOriginal = np.array(self.starsOriginal)
+            self.alignStarOffsets = self.stars - self.starsOriginal
+
+            for ii in range(sci_data.shape[0]):
+                # imgsPadded = self.pad_imgs(sci_data[ii], outputShape=(1100,1100), fill=0.)
+                alignMasks = shift_pix_to_pix(occultMask, self.starsOriginal[ii],
+                                              finalYX=self.alignStar,
+                                              outputSize=np.array([2048, 2048]),
+                                              order=1, fill=-1e4)
+                alignMasksAll.append(alignMasks.copy())
+            alignMasks = np.array(alignMasksAll)
+
+# FIX ME!!! Need to get original star centers from aligned fits headers
+# in order to align masks, if input images are aligned already.
+
+#         # Align occulter masks with aligned images.
+# # TEMP!!! Stick with 1100x1100 arrays for simplicity to start.
+#         #     # Define new aligned star position.
+#         #     if pad:
+#         #         matSize = np.array([2048, 2048])
+#         #         alignStar = matSize//2
+#         #     else:
+#         #         matSize = None
+#         #         alignStar = np.round(self.stars[0])
+#         matSize = self.imgShape
+#         alignMasks = []
+#         for ii in tqdm(range(len(self.workingImgs)), desc="Aligning masks"):
+#             alignMasks.append(shift_pix_to_pix(occultMask, self.starsOriginal[ii],
+#                                                 finalYX=self.alignStar, outputSize=matSize,
+#                                                 order=1, fill=-1e4))
+#         alignMasks = np.array(alignMasks)
+
+
+    # ==== BACKGROUND SUBTRACTION ==== #
+
+# # FIX ME!!! Add option here to do background subtraction from the individual CRSPLITS
+#             self.bgSubSplits = True
+#             if self.bgSubSplits:
+#                 pass
+
+        # Subtract background/sky.
+        if self.bgCen is not None:
+            print("\nSubtracting background from all images...")
+            self.subtract_background(noOffsetDatasets=noOffsetDatasets)
+            print("Background means subtracted: {}".format(self.bgs))
+        else:
+            print("Skipping background subtraction (bgCen is None)")
+
+
+    # ========== COMBINE CRSPLITS ========== #
 
 # FIX ME!!! CRSPLIT combination should move to a method eventually.
-            # Combine CRSPLITS into one "integrated" image per FITS.
+        # Combine CRSPLITS into one "integrated" image per FITS.
+# FIX ME!!! Should maybe base the logic here on the dimensions of the input
+# files rather than their suffixes. If 
+        if self.inputType in ['flt', 'flc', 'alt', 'alc', 'axt', 'axc']:
+            print("\nCombining CRSPLITS into unified images...")
 # TEMP!!! TESTING DIFFERENT CLEANING AND UNIFICATION METHODS.
             # unifiedImgs = np.mean(sci_data, axis=1)
             # unifiedImgs = np.median(sci_data, axis=1)
             yy, xx = np.ogrid[:sci_data[0].shape[1], :sci_data[0].shape[2]]
-            for ii in range(sci_data.shape[0]):
+            for ii in tqdm(range(sci_data.shape[0]), desc="Images being unified"):
                 # # Clip highest valued pixel in every CRSPLIT stack.
                 # # WARNING: This distorts the bg star shapes -- don't like it
                 # sci_data[ii][np.argmax(sci_data[ii], axis=0), yy, xx] = np.nan
@@ -857,32 +1564,7 @@ class Pipeline(object):
                 imgsHdrs[1].append(sci_headers[ii])
 
             del unifiedImgs # don't need this anymore
-# TEMP END!!!
 
-        # Get input image intensity units.
-        self.bunit = imgsHdrs[1][0][1]['BUNIT']
-
-        # Separate science frames from PSF reference frames via the target name.
-        self.sciInds = np.where(np.char.lower(targs) == targ.lower())[0]
-        self.refInds = np.where(np.char.lower(targs) != targ.lower())[0]
-        # Number of input science and reference frames (before any combinations)
-        self.nSci = np.size(self.sciInds)
-        self.nRef = np.size(self.refInds)
-
-        print("\nScience image indices: {}".format(self.sciInds))
-        print("Ref image indices ({}): {}\n".format(targs[self.refInds], self.refInds))
-
-        # Get UT observation date, proposed aperture name, orientat angles, and
-        # rough star coordinates from headers.
-        self.obsDate = imgsHdrs[1][self.sciInds[0]][0]["TDATEOBS"] # [UT]
-        self.propAper = imgsHdrs[1][self.sciInds[0]][0]["PROPAPER"]
-        self.orientats = np.array([imgsHdrs[1][ii][1]["ORIENTAT"] for ii in range(len(imgsHdrs[0]))])
-# FIX ME!!! Need to fully switch to using the self.orientats attribute.
-        orientats = self.orientats
-
-        self.exptimes_all_s = [ii[0].get('TEXPTIME', -1) for ii in imgsHdrs[1]] # [s]
-        self.exptimes_s = [imgsHdrs[1][ii][0].get('TEXPTIME', -1) for ii in self.sciInds] # [s]
-        self.photflam_avg = np.mean([imgsHdrs[1][ii][0].get('PHOTFLAM', -1.) for ii in self.sciInds])
 
         # Zero-pad images to uniform dimensions, depending on instrument.
         if self.instrument == 'stis':
@@ -899,26 +1581,73 @@ class Pipeline(object):
             # Update header image dimensions and WCS reference coordinates.
             imgsHdrs[1] = self.update_dimensions([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))],
                                                   imgsHdrs[1])
+# TEMP END!!!
 
-        # Either force star position or estimate based on headers.
-        if self.forceStar:
-            self.starFromWCS = self.starToUse
-        else:
-            self.starFromWCS_list = []
-            for ii, hdr in enumerate(imgsHdrs[1]):
-                # Get estimate of star position from target RA/Dec and WCS in header.
-                ww = wcs.WCS(hdr[1])
-                targRA = hdr[0]['RA_TARG']
-                targDec = hdr[0]['DEC_TARG']
-                self.starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
-            self.starFromWCS = np.mean(self.starFromWCS_list, axis=0)
+# FIX ME!!! DEPRECATED BY similar code run earlier (after data are loaded).
+#         # Get input image intensity units.
+#         self.bunit = imgsHdrs[1][0][1]['BUNIT']
+
+#         # Separate science frames from PSF reference frames via the target name.
+#         self.sciInds = np.where(np.char.lower(targs) == targ.lower())[0]
+#         self.refInds = np.where(np.char.lower(targs) != targ.lower())[0]
+#         # Number of input science and reference frames (before any combinations)
+#         self.nSci = np.size(self.sciInds)
+#         self.nRef = np.size(self.refInds)
+
+#         print("\nScience image indices: {}".format(self.sciInds))
+#         print("Ref image indices ({}): {}\n".format(targs[self.refInds], self.refInds))
+
+#         # Get UT observation date, proposed aperture name, orientat angles, and
+#         # rough star coordinates from headers.
+#         self.obsDate = imgsHdrs[1][self.sciInds[0]][0]["TDATEOBS"] # [UT]
+#         self.propAper = imgsHdrs[1][self.sciInds[0]][0]["PROPAPER"]
+#         self.orientats = np.array([imgsHdrs[1][ii][1]["ORIENTAT"] for ii in range(len(imgsHdrs[0]))])
+# # FIX ME!!! Need to fully switch to using the self.orientats attribute.
+#         orientats = self.orientats
+
+#         self.exptimes_all_s = [ii[0].get('TEXPTIME', -1) for ii in imgsHdrs[1]] # [s]
+#         self.exptimes_s = [imgsHdrs[1][ii][0].get('TEXPTIME', -1) for ii in self.sciInds] # [s]
+#         self.photflam_avg = np.mean([imgsHdrs[1][ii][0].get('PHOTFLAM', -1.) for ii in self.sciInds])
+
+        # # Zero-pad images to uniform dimensions, depending on instrument.
+        # if self.instrument == 'stis':
+        #     outsize = np.array([1100, 1100])
+        #     for ii in range(len(imgsHdrs[0])):
+        #         im = imgsHdrs[0][ii][1]
+        #         if im.shape != tuple(outsize):
+        #             imgsHdrs[0][ii][1] = zero_pad(im, outsize=outsize,
+        #                                           method='simple')
+        #             for jj, hdr in enumerate(imgsHdrs[1][ii]):
+        #                 if 'CRPIX1' in hdr.keys():
+        #                     imgsHdrs[1][ii][jj]['CRPIX1'] += (outsize[1] - im.shape[1])//2 # x
+        #                     imgsHdrs[1][ii][jj]['CRPIX2'] += (outsize[0] - im.shape[0])//2 # y
+        #     # Update header image dimensions and WCS reference coordinates.
+        #     imgsHdrs[1] = self.update_dimensions([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))],
+        #                                           imgsHdrs[1])
+
+        # # Either force star position or estimate based on headers.
+        # if self.forceStar:
+        #     self.starFromWCS = self.starToUse
+        # else:
+        #     self.starFromWCS_list = []
+        #     for ii, hdr in enumerate(imgsHdrs[1]):
+        #         # Get estimate of star position from target RA/Dec and WCS in header.
+        #         ww = wcs.WCS(hdr[1])
+        #         targRA = hdr[0]['RA_TARG']
+        #         targDec = hdr[0]['DEC_TARG']
+        #         self.starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
+        #     self.starFromWCS = np.mean(self.starFromWCS_list, axis=0)
 
         # # Check number of images per fits file.
         # nImgsPerFits = [len(imgsHdrs[0][ii]) for ii in range(len(imgsHdrs[0]))]
         # print("Data arrays per fits file: {}".format(nImgsPerFits))
 
+        # # Separate images into their own 3-d array. Includes Sci and Ref images.
+        # allImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
+
         # Separate images into their own 3-d array. Includes Sci and Ref images.
-        allImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
+        # Then define them as the current working images.
+        self.workingImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
 
         # Split out science headers for later convenience.
         self.allHdrs = imgsHdrs[1]
@@ -933,7 +1662,8 @@ class Pipeline(object):
         # Convert intensity to counts per second.
         newUnit = 'COUNTS S-1'
         # newUnit = 'mJy arcsec-2'
-        allImgs = convert_intensity(allImgs, imgsHdrs[1], unitEnd=newUnit,
+        self.workingImgs = convert_intensity(self.workingImgs, imgsHdrs[1],
+                                    unitEnd=newUnit,
                                     pscale=self.pscale) # [counts/s]
         self.bunit = newUnit
         print("Converted image intensity units to {}".format(newUnit))
@@ -942,67 +1672,51 @@ class Pipeline(object):
         # Combine individual exposures in an orbit to make one image.
         # Redefine orientats and indices based on these combined images.
         if (not noCombine) and (psfSubMode.lower() not in ['pyklip-rdi']):
-            orbitImgs, orientats = self.combineOrbitImgs(allImgs, orientats)
-        else:
-            orbitImgs = allImgs.copy()
-
-        # Apply distortion correction if needed (sx2 already corrected/"rectified")
-        if self.inputType not in ['sx2']: #TODO
-    # FIX ME!!! Add distortion correction step
-            pass
-
-        # Mask out occulting wedges (later replacing with NaN values).
-        if self.instrument == 'stis':
-            occultMask = fits.getdata(self.occultMaskPath)
-        else:
-            print("***HELP!!! Occulter masks are not implemented yet for "\
-                  "instruments other than STIS")
-            occultMask = np.zeros(orbitImgs[0].shape)
-        occultMask[occultMask < 0] = -1.e4
+            self.workingImgs, orientats = self.combineOrbitImgs(self.workingImgs, orientats)
 
 
-    # ==== ALIGN IMAGES TO COMMON STAR POSITION ==== #
+    # # ==== ALIGN IMAGES TO COMMON STAR POSITION ==== #
 
-        # Find the occulted star's coordinates in every image.
-        self.find_star(orbitImgs, occultMask)
+    #     # Find the occulted star's coordinates in every image.
+    #     self.find_star(orbitImgs, occultMask)
 
-        # Define new aligned star position.
-        if pad:
-            matSize = np.array([2048, 2048])
-            alignStar = matSize//2
-        else:
-            matSize = None
-            alignStar = np.round(self.stars[0])
-        self.alignStar = alignStar
+    #     # Define new aligned star position.
+    #     if pad:
+    #         matSize = np.array([2048, 2048])
+    #         alignStar = matSize//2
+    #     else:
+    #         matSize = None
+    #         alignStar = np.round(self.stars[0])
+    #     self.alignStar = alignStar
 
-        # Register images to align stars.
-        # Also pad the images to matSize if self.noPad is not set.
-        print("\nAligning images and masks to common star position...")
-        alignImgs = []
-        alignMasks = []
-        for ii in tqdm(range(len(orbitImgs)), desc="Aligned images"):
-            alignImgs.append(shift_pix_to_pix(orbitImgs[ii], self.stars[ii],
-                                              finalYX=self.alignStar, outputSize=matSize,
-                                              order=3, fill=0.))
-            alignMasks.append(shift_pix_to_pix(occultMask, self.stars[ii],
-                                               finalYX=self.alignStar, outputSize=matSize,
-                                               order=1, fill=-1e4))
-        alignImgs = np.array(alignImgs)
-        alignMasks = np.array(alignMasks)
-        # Preserve original star positions before overwriting stars with new
-        # aligned position. Keep the offsets around for posterity.
-        self.starsOriginal = self.stars.copy()
-        self.stars[:] = self.alignStar
-        self.alignStarOffsets = self.stars - self.starsOriginal
+    #     # Register images to align stars.
+    #     # Also pad the images to matSize if self.noPad is not set.
+    #     print("\nAligning images and masks to common star position...")
+    #     alignImgs = []
+    #     alignMasks = []
+    #     for ii in tqdm(range(len(orbitImgs)), desc="Aligned images"):
+    #         alignImgs.append(shift_pix_to_pix(orbitImgs[ii], self.stars[ii],
+    #                                           finalYX=self.alignStar, outputSize=matSize,
+    #                                           order=3, fill=0.))
+    #         alignMasks.append(shift_pix_to_pix(occultMask, self.stars[ii],
+    #                                            finalYX=self.alignStar, outputSize=matSize,
+    #                                            order=1, fill=-1e4))
+    #     alignImgs = np.array(alignImgs)
+    #     alignMasks = np.array(alignMasks)
+    #     # Preserve original star positions before overwriting stars with new
+    #     # aligned position. Keep the offsets around for posterity.
+    #     self.starsOriginal = self.stars.copy()
+    #     self.stars[:] = self.alignStar
+    #     self.alignStarOffsets = self.stars - self.starsOriginal
 
         if self.debug:
             fig = plt.figure(3)
-            for ii in range(len(alignImgs)):
+            for ii in range(len(self.workingImgs)):
                 st = np.round(self.stars[ii]).astype(int)
                 fig.clf()
                 ax = plt.subplot(111)
-                ax.imshow(alignImgs[ii][st[0]+roiY[0]:st[0]+roiY[1],
-                                        st[1]+roiX[0]:st[1]+roiX[1]],
+                ax.imshow(self.workingImgs[ii][st[0]+roiY[0]:st[0]+roiY[1],
+                                               st[1]+roiX[0]:st[1]+roiX[1]],
                           norm=SymLogNorm(linthresh=1., linscale=1.,
                                           vmin=0., vmax=5000.),
                           extent=[st[1]+roiX[0], st[1]+roiX[1],
@@ -1012,24 +1726,19 @@ class Pipeline(object):
                 plt.draw()
                 pdb.set_trace()
 
-        noOffsetDatasets = ['V-AK-SCO', 'GSC-07396-00759', 'HD-106906', 'HD-111161',
-                            'HD-114082', 'HD-115600', 'HD-117214',
-                            'HD-129590', 'HD-145560', 'HD-146897']
+        # # Update header WCS reference coordinates and image dimensions.
+        # self.update_wcs(alignImgs)
 
-        # Update header WCS reference coordinates and image dimensions.
-        self.update_wcs(alignImgs)
+ # FIX ME!!! MOVED EARLIER. Should delete this bg sub snippet.
+    # # ==== BACKGROUND SUBTRACTION ==== #
 
-    # ==== BACKGROUND SUBTRACTION ==== #
-
-        # Subtract background/sky.
-# FIX ME!!! Assign workingImgs higher up eventually.
-        self.workingImgs = alignImgs
-        if self.bgCen is not None:
-            print("\nSubtracting background from all images...")
-            self.subtract_background(noOffsetDatasets=noOffsetDatasets)
-            print("Background means subtracted: {}".format(self.bgs))
-        else:
-            print("Skipping background subtraction (bgCen is None)")
+    #     # Subtract background/sky.
+    #     if self.bgCen is not None:
+    #         print("\nSubtracting background from all images...")
+    #         self.subtract_background(noOffsetDatasets=noOffsetDatasets)
+    #         print("Background means subtracted: {}".format(self.bgs))
+    #     else:
+    #         print("Skipping background subtraction (bgCen is None)")
 
     # # BG TESTING!!!
     #     plt.figure(5)
@@ -1040,7 +1749,6 @@ class Pipeline(object):
     #         plt.xlim(1024-200, 1024+201)
     #         plt.draw()
     #         pdb.set_trace()
-
 
     # ==== CREATE IMAGE MASKS ==== #
 
@@ -1250,9 +1958,9 @@ class Pipeline(object):
             alignImgsMasked = self.workingImgs + alignMasks
             alignImgsMasked[alignMasks < 0] = np.nan
 
-            stis_psfsub.do_klip_stis(targ, fl[self.sciInds],
+            stis_psfsub.do_klip_stis(targ, self.fileList[self.sciInds],
                 inputImgs=alignImgsMasked[self.sciInds], inputHdrs=None,
-                psfPaths=fl, psfImgs=alignImgsMasked, mode='RDI',
+                psfPaths=self.fileList, psfImgs=alignImgsMasked, mode='RDI',
                 ann=int(OWA-IWA), subs=1, minrot=0, mvmt=0, IWA=IWA, OWA=OWA,
                 numbasis=[1,2,3,5,15], maxnumbasis=None, star=self.stars,
                 highpass=False, pre_sm=None, spWidth=8., ps_spWidth=0., PAadj=0.,
@@ -1267,7 +1975,7 @@ class Pipeline(object):
         # PyKLIP ADI subtraction.
         elif psfSubMode.lower() == 'pyklip-adi':
             print("Performing pyKLIP ADI PSF subtraction...")
-            stis_psfsub.do_klip_stis(targ, fl[self.sciInds],
+            stis_psfsub.do_klip_stis(targ, self.fileList[self.sciInds],
                 inputImgs=self.workingImgs[self.sciInds], inputHdrs=None,
                 psfPaths=None, psfImgs=None, mode='ADI', 
                 ann=1, subs=1, minrot=0, mvmt=5, IWA=10., OWA=200.,
@@ -1440,11 +2148,13 @@ class Pipeline(object):
                                             r_max=400, rdelta=3)
                     # Extrapolate background noise into inner regions where we
                     # don't sample it well or at all but we do have data.
-                    stdStrip1 = gaussian_filter(stdMap[self.alignStar[0], self.alignStar[1]-70:self.alignStar[1]], 3)
-                    stdStrip2 = gaussian_filter(stdMap[self.alignStar[0], self.alignStar[1]+1:self.alignStar[1]+1+70], 3)
+                    stdStrip1 = gaussian_filter(stdMap[int(self.alignStar[0]),
+                                                       int(self.alignStar[1]-70):int(self.alignStar[1])], 3)
+                    stdStrip2 = gaussian_filter(stdMap[int(self.alignStar[0]),
+                                                       int(self.alignStar[1]+1):int(self.alignStar[1]+1+70)], 3)
                     stdStrip = np.nanmean([stdStrip1, stdStrip2[::-1]], axis=0)
                     fe = interp1d(np.arange(self.alignStar[1]-70, self.alignStar[1])[~np.isnan(stdStrip)],
-                                  gaussian_filter(stdMap[self.alignStar[0], self.alignStar[1]-70:self.alignStar[1]], 3)[~np.isnan(stdStrip)],
+                                  gaussian_filter(stdMap[int(self.alignStar[0]), int(self.alignStar[1]-70):int(self.alignStar[1])], 3)[~np.isnan(stdStrip)],
                                   kind='linear', fill_value="extrapolate")
                     interpStd = fe(np.arange(self.alignStar[1]-70, self.alignStar[1]))
                     for rr in range(1, 30): #len(interpStd)):
