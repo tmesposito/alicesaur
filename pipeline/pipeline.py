@@ -1952,7 +1952,9 @@ class Pipeline(object):
                                     radProfMax=radProfMax,
                                     radProfMasks=sourceMasks[self.sciInds],
                                     subRadProf=self.subRadProf,
-                                    bgCen=self.bgCen, bgRadius=self.bgRadius)
+                                    bgCen=self.bgCen, bgRadius=self.bgRadius,
+                                    optimize_dither=True)
+
             self.psfSubImgs = psfSubImgs
             self.refScaleFactors = refScaleFactors
             print(f"Ref scale factors by science image: {refScaleFactors}")
@@ -1990,7 +1992,8 @@ class Pipeline(object):
                                     radProfMax=radProfMax,
                                     radProfMasks=sourceMasks[self.sciInds],
                                     subRadProf=self.subRadProf,
-                                    bgCen=self.bgCen, bgRadius=self.bgRadius)
+                                    bgCen=self.bgCen, bgRadius=self.bgRadius,
+                                    optimize_dither=True)
             self.psfSubImgs = psfSubImgs
             self.refScaleFactors = refScaleFactors
 
@@ -2042,7 +2045,33 @@ class Pipeline(object):
 
         # Do another background subtraction before combination??
     # SKIP -- for now.
-    
+
+
+        # Perform astrometry on occulted primary using background star
+        # Gaia positions.
+        if self.do_gaia:
+            print("\n*** Doing Gaia astrometry thingy ***\n")
+            from alicesaur.gaia.astrometry import main
+# FIX ME!!!Hardcoding the Gaia id for HD 114082 for now.
+# Change this astrometry code to accept the target name as input.
+            target_gaia_id = 6055854551117476480 #6072902994276659200 is HD-106906
+            target_rv = [0., 0.]
+            all_gaia_out = []
+            for ii, img in enumerate(self.psfSubImgs):
+                # Star input order is x,y
+                # Output order is:
+                # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
+                # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
+                # final_tn_std
+                gaia_out = main(f"{self.targ}_{self.obsMode}_{self.inputType}_{ii}",
+                                self.instrument, target_gaia_id, target_rv,
+                                self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
+                                exclude_extra=[], im=img, hdr=self.sciHdrs[ii][1],
+                                out_dir=self.dataDir)
+                all_gaia_out.append(gaia_out)
+                print(f"Gaia X: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
+
+
         if psfSubMode.lower() in ["adi", "rdi"]:
             # Apply mask for occulters and diffraction spikes to
             # PSF-subtracted images before the final collapse.

@@ -96,6 +96,10 @@ if __name__ == "__main__":
     parser.add_argument('--debug',
                         action="store_true", help=desc)
 
+    desc = 'Use --do-gaia to do the Gaia astrometry thingy.'
+    parser.add_argument('--do-gaia',
+                        action="store_true", help=desc)
+
     args = parser.parse_args()
 
     # Create the reduction pipeline instance.
