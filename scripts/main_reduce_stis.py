@@ -46,6 +46,13 @@ if __name__ == "__main__":
                         default="rdi", type=str, nargs='?',
                         help=desc)
 
+    desc = 'Minimum PA rotation in [degrees] relative to science image ' \
+            + 'required to allow a reference image when using ADI PSF ' \
+            + 'subtraction. Default is None (allow all references).'
+    parser.add_argument('--deltaPAMin',
+                        default=None, type=float, nargs='?',
+                        help=desc)
+
     desc = 'Target name (e.g., HD-32297)'
     parser.add_argument('--targ', metavar='targ',
                         default="", type=str, nargs='?',

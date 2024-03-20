@@ -60,6 +60,9 @@ class Pipeline(object):
     pscale = 0.0507 # [arcsec/pixel]
     # Image dimensions.
     imgShape = np.array([1024, 1024]) # [Y,X pixels]
+    # Minimum PA rotation to allow reference images in ADI PSF subtractions.
+    # None allows all reference images.
+    deltaPAMin = None
 
     def __init__(self, **kwargs):
 
@@ -77,7 +80,7 @@ class Pipeline(object):
         if self.instrument == 'stis':
 # FIX ME!!! Tailor occulter masks to flt and sx2 files separately???
             self.occultMaskPath = os.path.join(self.packageHome, 'masks',
-                    f'mask_stis_occulters_sx2_bar_wedgeB.fits')
+                                    'mask_stis_occulters_sx2_bar_wedgeB.fits')
         else:
             self.occultMaskPath = ''
 
@@ -1802,7 +1805,7 @@ class Pipeline(object):
                 psfSubMasks[ind][radii < sub_r_in] = np.nan
                 psfSubMasks[ind] += sourceMasks[ind].copy()
     
-    # TEMP!!! Force in a bg star mask for HD 111161 wedge
+ # FIX ME!!! HARDCODED to force in a bg star mask for HD 111161 wedge
             if (targ == 'HD-111161') & (obsMode == 'wedgeb1.0'):
                 bgStarCen = np.array([987, 763]) - self.alignStar
                 bgStarCenRot = np.array([np.cos(np.radians(orientats[ind]))*bgStarCen[0] - np.sin(np.radians(orientats[ind]))*bgStarCen[1],
@@ -1843,31 +1846,52 @@ class Pipeline(object):
         #   exclusionsRef['r_out'] = exclusionsSci.get('r_out')
         # if exclusionsRef.get('r_in') is None:
         #   exclusionsRef['r_in'] = exclusionsSci.get('r_in')
-        for ii, ind in tqdm(enumerate(self.refInds), desc="Reference masks"):
-    # TEMP!!! TEST ONLY PSF SUBTRACTING BASED ON DIFFRACTION SPIKES.
-            if psfsubOnSpikesOnly:
-                psfSubMasks[ind] = np.zeros(psfSubMasks[ind].shape).astype(bool)
-            # psfSubMasks[ind][radii >= exclusionsRef.setdefault('r_out', 70)] = np.nan
-            # psfSubMasks[ind][radii < exclusionsRef.setdefault('r_in', 35)] = np.nan
-            psfSubMasks[ind][alignMasks[ind] < 0] = np.nan
-            # Don't offset PA of reference mask because coords should already be
-            # given in rotated frame.
-            # Always offset the coordinates based on the new aligned star center
-            # for reference images because those mask coordinates are only ever
-            # measured from the raw images.
-            # Special case of HD 106906 wedgeb1.8 has two dither positions on same
-            # wedge, so handle that offset correctly.
-            if (targ == 'HD-106906') and (obsMode == 'wedgeb1.8'):
-                psfSubMasks[ind] = mask_exclusions(mask=psfSubMasks[ind],
-                                            exclusions=exclusionsRef,
-                                            cen=self.alignStar, cenOffset=self.alignStarOffsets[self.refInds[0]],
-                                            paOffset=0, spikeAngles=self.spikeAngles)
-            else:
-                psfSubMasks[ind] = mask_exclusions(mask=psfSubMasks[ind],
+        if self.psfSubMode in ['rdi']:
+            for ii, ind in tqdm(enumerate(self.refInds), desc="Reference masks"):
+        # TEMP!!! TEST ONLY PSF SUBTRACTING BASED ON DIFFRACTION SPIKES.
+                if psfsubOnSpikesOnly:
+                    psfSubMasks[ind] = np.zeros(psfSubMasks[ind].shape).astype(bool)
+
+                psfSubMasks[ind][alignMasks[ind] < 0] = np.nan
+                # Don't offset PA of reference mask because coords should
+                # already be given in rotated frame.
+                # Always offset the coordinates based on the new aligned star
+                # center for reference images because those mask coordinates
+                # are only ever measured from the raw images.
+                # Special case of HD 106906 wedgeb1.8 has two dither positions
+                # on same wedge, so handle that offset correctly.
+                if (targ == 'HD-106906') and (obsMode == 'wedgeb1.8'):
+                    psfSubMasks[ind] = mask_exclusions(mask=psfSubMasks[ind],
+                                                exclusions=exclusionsRef,
+                                                cen=self.alignStar, cenOffset=self.alignStarOffsets[self.refInds[0]],
+                                                paOffset=0, spikeAngles=self.spikeAngles)
+                else:
+                    psfSubMasks[ind] = mask_exclusions(mask=psfSubMasks[ind],
+                                                exclusions=exclusionsRef,
+                                                cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
+                                                paOffset=0, spikeAngles=self.spikeAngles)
+        # ADI and all other non-RDI cases.
+        else:
+            psfSubMasks_refs = alignMasks.copy()
+            # Lazy bookkeeping to convert occulter spike mask to boolean,
+            # where masked elements are set to True.
+            psfSubMasks_refs[psfSubMasks_refs >= 0] = 0
+            psfSubMasks_refs[psfSubMasks_refs < 0] = 1
+            psfSubMasks_refs = psfSubMasks_refs.astype(bool)
+            # Add in diffraction spike masks.
+            # psfSubMasks_refs = psfSubMasks_refs + (-1*masks.astype(int))
+            psfSubMasks_refs = psfSubMasks_refs + masks
+            for ii, ind in tqdm(enumerate(self.sciInds), desc="Reference masks"):
+                # Don't offset PA of reference mask because coords should
+                # already be given in rotated frame.
+                # Always offset the coordinates based on the new aligned star
+                # center for reference images because those mask coordinates
+                # are only ever measured from the raw images.
+                psfSubMasks_refs[ind] = mask_exclusions(mask=psfSubMasks_refs[ind],
                                             exclusions=exclusionsRef,
                                             cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
-                                            paOffset=0, spikeAngles=self.spikeAngles) #-1*orientats[ind])
-    
+                                            paOffset=0, spikeAngles=self.spikeAngles)
+
             if self.debug:
                 for ii in range(len(psfSubMasks)):
                     plt.figure(5)
@@ -1915,28 +1939,61 @@ class Pipeline(object):
                 self.subRadProf = False
 
             psfSubImgs, refScaleFactors = stis_psfsub.rdi_subtract_psf(
-                                            self.workingImgs[self.sciInds],
-                                            self.workingImgs[self.refInds],
-                                            psfSubMasks[self.sciInds],
-                                            psfSubMasks[self.refInds],
-                                            self.stars[self.sciInds], C0=-1.,
-                                            rmin=rmin, rmax=sub_r_out,
-                                            ann=ann, orientats=orientats[self.sciInds],
-                                            radProfPaList=radProfPaList,
-                                            radProfPaHW=radProfPaHW,
-                                            radProfMax=radProfMax,
-                                            radProfMasks=sourceMasks[self.sciInds],
-                                            subRadProf=self.subRadProf,
-                                            bgCen=self.bgCen, bgRadius=self.bgRadius)
+                                    self.workingImgs[self.sciInds],
+                                    self.workingImgs[self.refInds],
+                                    psfSubMasks[self.sciInds],
+                                    psfSubMasks[self.refInds],
+                                    self.stars[self.sciInds], C0=-1.,
+                                    rmin=rmin, rmax=sub_r_out, ann=ann,
+                                    deltaPAMin=self.deltaPAMin,
+                                    orientats=orientats[self.sciInds],
+                                    radProfPaList=radProfPaList,
+                                    radProfPaHW=radProfPaHW,
+                                    radProfMax=radProfMax,
+                                    radProfMasks=sourceMasks[self.sciInds],
+                                    subRadProf=self.subRadProf,
+                                    bgCen=self.bgCen, bgRadius=self.bgRadius)
             self.psfSubImgs = psfSubImgs
             self.refScaleFactors = refScaleFactors
             print(f"Ref scale factors by science image: {refScaleFactors}")
+
         # Basic ADI PSF subtraction.
         elif psfSubMode.lower() == 'adi':
             print("Performing ADI PSF subtraction...")
-            psfSubImgs = stis_psfsub.adi_subtract_psf()
+            rmin = 1 # PSFsub masking supercedes this value.
+            getRadProf = info[obsMode].get('radProfSub')
+            if getRadProf and (getRadProf is not None):
+                radProfPaList = info[obsMode]['radProfSub'].setdefault('paList', [0])
+                if radProfPaList is not None:
+                    radProfPaList = np.array(radProfPaList)
+                    self.subRadProf = True
+                else:
+                    self.subRadProf = False
+                radProfPaHW = info[obsMode]['radProfSub'].setdefault('paHW', 50)
+                radProfMax = info[obsMode]['radProfSub'].setdefault('rMax', 200)
+            else:
+                radProfPaList = None
+                radProfPaHW = None
+                radProfMax = None
+                self.subRadProf = False
+
+            psfSubImgs, refScaleFactors = stis_psfsub.adi_subtract_psf(
+                                    self.workingImgs[self.sciInds],
+                                    self.workingImgs[self.sciInds],
+                                    psfSubMasks[self.sciInds],
+                                    psfSubMasks_refs,
+                                    self.stars[self.sciInds], self.deltaPAMin,
+                                    self.orientats[self.sciInds],
+                                    C0=-1., rmin=rmin, rmax=sub_r_out, ann=ann,
+                                    radProfPaList=radProfPaList,
+                                    radProfPaHW=radProfPaHW,
+                                    radProfMax=radProfMax,
+                                    radProfMasks=sourceMasks[self.sciInds],
+                                    subRadProf=self.subRadProf,
+                                    bgCen=self.bgCen, bgRadius=self.bgRadius)
             self.psfSubImgs = psfSubImgs
-            self.refScaleFactors = None
+            self.refScaleFactors = refScaleFactors
+
         # PyKLIP RDI subtraction.
         elif psfSubMode.lower() == 'pyklip-rdi':
             print("Performing pyKLIP RDI PSF subtraction...")
@@ -1960,6 +2017,7 @@ class Pipeline(object):
 
             self.psfSubImgs = []
             self.refScaleFactors = None
+
         # PyKLIP ADI subtraction.
         elif psfSubMode.lower() == 'pyklip-adi':
             print("Performing pyKLIP ADI PSF subtraction...")

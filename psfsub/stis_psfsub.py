@@ -278,12 +278,16 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                      C0=0., rmin=0, rmax=None, ann=1, orientats=None,
                      radProfPaList=np.array([0.]), radProfPaHW=40,
                      radProfMax=200, radProfMasks=None,
-                     bgCen=None, bgRadius=30, subRadProf=True):
+                     bgCen=None, bgRadius=30, subRadProf=True,
+                     deltaPAMin=None):
     """
         C0: initial guess for log10 of scalar multiplier of ref PSF.
         subRadProf: bool, True to subtract a radial profile after main PSF subtraction.
+        deltaPAMin: float, Minimum PA rotation in [degrees] relative to science
+            image required to allow a reference image when using ADI PSF
+            subtraction. Default is None (to allow all references).
     """
-    
+
     def residuals_multi_ref(ps, sci, refs, weightMap=1.):
         weights = 10**ps
         resMasked = weightMap*(sci - np.sum((weights.transpose()*refs.transpose()).transpose(), axis=0))
@@ -509,8 +513,15 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
             #                            r_max=rmax+3, use_median=True)
             # weightMap *= radii
             weightMap = 1.
+            # If there's a PA exclusion criterion, rebuild the reference image
+            # library to only include the allowed images.
+            if deltaPAMin is not None:
+                PAsInclude = (np.abs(orientats - orientats[ii]) >= deltaPAMin)
+            else:
+                PAsInclude = np.ones(len(refImgs), dtype=bool)
+            refImgsAllowed = refImgsMasked[PAsInclude]
             # For annular subsections.
- # FIX ME!!! Multiple annuli not tested for multi refs.
+ # FIX ME!!! Multiple annuli not tested for multi refs. Probably broken.
             if ann > 1:
                 if rmax is None:
                     rmax = np.nanmax(radii)
@@ -521,26 +532,26 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     annulus = (radii >= annRinList[jj]) & (radii < annRinList[jj+1])
                     imgAnnulus = img.copy()
                     imgAnnulus[~annulus] = np.nan
-                    pf = leastsq(residuals, p0, args=(imgAnnulus, refImgMasked))
-                    subImg[annulus] = (sciImgs[ii] - (10**pf[0])*refImgMasked)[annulus]
+                    pf = leastsq(residuals, p0, args=(imgAnnulus, refImgsAllowed))
+                    subImg[annulus] = (sciImgs[ii] - (10**pf[0])*refImgsAllowed)[annulus]
             # For full image (no subsection) subtraction.
             else:
                 k = 0 # degree of polynomial
-                pf = leastsq(residuals_multi_ref, p0, args=(img,
-                                                    refImgsMasked, weightMap),
-                              full_output=1, factor=1, epsfcn=0.1)
+                pf = leastsq(residuals_multi_ref, p0[PAsInclude],
+                             args=(img, refImgsAllowed, weightMap),
+                             full_output=1, factor=1, epsfcn=0.1)
                 if k > 0:
                     print("\n***HELP!!! Poly fit not implemented for "\
                           "multiple ref images. Sorry!\n")
                     pass
                 else:
-                    subImg = sciImgs[ii] - np.sum(((10**pf[0].transpose())*refImgsMasked.transpose()).transpose(), axis=0)
+                    subImg = sciImgs[ii] - np.sum(((10**pf[0].transpose())*refImgs[PAsInclude].transpose()).transpose(), axis=0)
                     refScaleFactors.append(10**pf[0])
 
                 p0_dither = np.array([0.1, 0.1])
                 pf_dither = leastsq(dither_residuals, p0_dither,
                              args=(img,
-                                   np.sum(((10**pf[0].transpose())*refImgs.transpose()).transpose(), axis=0),
+                                   np.sum(((10**pf[0].transpose())*refImgs[PAsInclude].transpose()).transpose(), axis=0),
                                    refMasks[0], np.array([1024., 1024.]),
                                    True),
                              full_output=1, factor=1, epsfcn=0.1)
@@ -548,8 +559,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
 
                 # Replace the previous best subtraction with the better one.
                 if not np.all(bestDither == np.array([0,0])):
-                    ditheredRef = dither_image(np.sum(((10**pf[0].transpose())*refImgs.transpose()).transpose(), axis=0),
-                                               
+                    ditheredRef = dither_image(np.sum(((10**pf[0].transpose())*refImgs[PAsInclude].transpose()).transpose(), axis=0),
                                                star=np.array([1024., 1024.]),
                                                ditherPos=bestDither)
                     ditheredRefMasked = ditheredRef.copy()
@@ -586,11 +596,24 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
     return subImgs, refScaleFactors
 
 
-def adi_subtract_psf():
-    
-    pass
+def adi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
+                     deltaPAMin, orientats, C0=0., rmin=0, rmax=None, ann=1,
+                     radProfPaList=np.array([0.]), radProfPaHW=40,
+                     radProfMax=200, radProfMasks=None,
+                     bgCen=None, bgRadius=30, subRadProf=True):
+    """
+    ADI PSF subtraction wrapper.
+    """
 
-    return
+    subImgs, refScaleFactors = rdi_subtract_psf(sciImgs, refImgs, sciMasks,
+                     refMasks, sciStars,
+                     C0=C0, rmin=rmin, rmax=rmax, ann=ann, orientats=orientats,
+                     radProfPaList=radProfPaList, radProfPaHW=radProfPaHW,
+                     radProfMax=radProfMax, radProfMasks=radProfMasks,
+                     bgCen=bgCen, bgRadius=bgRadius, subRadProf=subRadProf,
+                     deltaPAMin=deltaPAMin)
+
+    return subImgs, refScaleFactors
 
 
 def make_stis_dataset(dataset, inputPaths, inputImgs=None, IWA=None, OWA=None,
