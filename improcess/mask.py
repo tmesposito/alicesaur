@@ -278,8 +278,9 @@ def show_masks(im, info, infoMode='bar10', imCat='sci', cen=None):
         ax.add_patch(circ)
 
     for rt in rectMasks:
-        # The xy anchor point is the lower left corner of the rectangle.
-        rect = patches.Rectangle((rt[0][1]-rt[1][1]//2, rt[0][0]-1.5*rt[1][0]),
+        # The xy anchor point around which the rectangle rotates is the
+        # lower left corner of the rectangle.
+        rect = patches.Rectangle((rt[0][1]-rt[1][1]//2, rt[0][0]+rt[1][0]//2),
                                   width=rt[1][1], height=rt[1][0], angle=rt[2],
                                   #rotation_point='center',
                                   edgecolor='0.5', facecolor='None')
