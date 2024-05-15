@@ -560,6 +560,30 @@ def make_tmp_copy(filePath, suffix='tmp', verbose=True):
     return
 
 
+def check_mkdir(newDir):
+    """Check for and make directory.
+
+    Function to check for a directory and make it if it doesn't exist.
+
+    Parameters
+    ----------
+    newDir : str
+        Path of directory to check for/make.
+
+    """
+
+    # Check for directory first.
+    if os.path.isdir(newDir):
+        print(f'Directory already exists: {newDir}')
+    elif os.path.exists(newDir):
+        print(f'File already exists at: {newDir}')
+    else:
+        # Make directory.
+        os.makedirs(newDir, 0o774)
+        print(f'Created directory: {newDir}')
+
+
+
 def generic_mcmc(func_model, pkeys, data, dataErr, xx=None, p0=None, priors=None,
                  nwalkers=100, niter=1000, nburn=0, nthreads=1, plot=True,
                  log_path='', sIdent='999'):
@@ -958,3 +982,13 @@ def load_info_json(infoDir):
         infoPath = ''
         print(f"\nFailed to load info.json from directory {infoDir}. "
               + "Returning an empty dict.")
+
+def format_target_name(targetName):
+
+    if targetName[:2].lower() == 'hd':
+        formattedName = 'HD' + targetName[2:].replace('-', ' ')
+    else:
+        print(f"WARNING: target name formatting not set up for {targetName}")
+        formattedName = targetName
+
+    return formattedName
