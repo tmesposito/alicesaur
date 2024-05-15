@@ -22,7 +22,7 @@ from alicesaur.plot.disk_plot import measure_radial_profile
 
 def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
                              rMax=180, interpInf=True, expandHW_r=False,
-                             expandHW=None):
+                             expandHW=None, mode='mean'):
     """
     paList: list, position angles east of +y axis in [degrees].
     paHW: half-width of PA wedge to include on either side of pa [deg].
@@ -37,7 +37,7 @@ def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
 
     for pa in paList:
         rads, prof, profOpp, paPeak, paOppPeak = measure_radial_profile(img,
-                                    star=cen, pa=pa, rMax=rMax, mode='mean',
+                                    star=cen, pa=pa, rMax=rMax, mode=mode,
                                     paHW=paHW, height=None, plot=False,
                                     expandHW_r=expandHW_r, expandHW=expandHW)
         # Clean the profiles of high outliers.
@@ -361,6 +361,8 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
     radii = make_radii(sciImgs[0], sciStars[0])
     if rmax is None:
         rmax = np.nanmax(radii)
+
+# *** SINGLE REFERENCE IMAGE CASE ***
     if len(refImgs) == 1:
         p0 = np.array([C0])
         refImgMasked = refImgs[0].copy()
@@ -478,7 +480,8 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                 meanRadProf = measure_mean_radial_prof(subImgMasked, sciStar,
                                                        paList=radProfPaList - orientats[ii],
                                                        paHW=radProfPaHW, rMax=radProfMax,
-                                                       interpInf=True)
+                                                       interpInf=True,
+                                                       mode='median')
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 subImgs.append(subImg - meanRadProf)
             else:
