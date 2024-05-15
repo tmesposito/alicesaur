@@ -89,7 +89,10 @@ def plot_fits(data_table, include_indx, sky_pos, sky_cov, px_pos, px_cov,
         _ = ax[j][4].xaxis.get_major_formatter().set_useOffset(False)
         _ = ax[j][4].yaxis.get_major_formatter().set_useOffset(False)
 
-        _ = ax[j][5].annotate('{}'.format(data_table['source_id'][i]), xy=(0.05, 0.9), xycoords='axes fraction', fontsize=6)
+        try:
+            _ = ax[j][5].annotate('{}'.format(data_table['SOURCE_ID'][i]), xy=(0.05, 0.9), xycoords='axes fraction', fontsize=6)
+        except:
+            _ = ax[j][5].annotate('{}'.format(data_table['source_id'][i]), xy=(0.05, 0.9), xycoords='axes fraction', fontsize=6)
         _ = ax[j][5].annotate(r'RUWE $=$ {:.1f}'.format(data_table['ruwe'][i]), xy=(0.05, 0.75), xycoords='axes fraction')
         _ = ax[j][5].annotate(r'$\chi^2_i =$ {:.1f}'.format(blobs[0][min_ind[0]][min_ind[1]][j]), xy=(0.05, 0.60), xycoords='axes fraction')
         _ = ax[j][5].axis('off')

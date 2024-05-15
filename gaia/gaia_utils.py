@@ -191,3 +191,20 @@ def confidence_levels(data):
     confidence = np.reshape(confidence, old_shape) 
 
     return confidence
+
+
+def get_gaia_id(simbadName):
+
+    from astroquery.simbad import Simbad
+    result_table = Simbad.query_objectids(simbadName)
+    gaiaIDs = [id for id in result_table['ID'] if 'Gaia' in id]
+
+    # Prefer Gaia DR3 ID if exists.
+    if len(gaiaIDs) > 0:
+        for dr in ['DR3', 'DR2']:
+            wh = [dr in id for id in gaiaIDs]
+            if np.any(wh):
+                gaiaID = np.array(gaiaIDs)[wh][0]
+                return gaiaID
+    else:
+        return None

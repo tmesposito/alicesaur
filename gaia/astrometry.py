@@ -213,7 +213,10 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     data = data[indx_good]
 
     n_stars = len(data)
-    source_id = data['source_id'].data
+    try:
+        source_id = data['SOURCE_ID'].data
+    except:
+        source_id = data['source_id'].data
 
     '''
     Set various parameters for the image
