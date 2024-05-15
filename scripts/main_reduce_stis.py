@@ -76,6 +76,12 @@ if __name__ == "__main__":
     parser.add_argument('--saveFinal', dest="saveFinal",
                         action="store_true", help=desc)
 
+    desc = 'Use --noFixCTI to NOT correct for Charge-Transfer Inefficiency in'\
+        ' each individual .flt image. Only applies if --input-type flt and '\
+        ' --pids [proposal ID] are supplied.'
+    parser.add_argument('--noFixCTI', dest="noFixCTI",
+                        action="store_true", help=desc)
+
     desc = 'Use --noFixPix to NOT fix bad pixels in each individual image.'
     parser.add_argument('--noFixPix', dest="noFixPix",
                         action="store_true", help=desc)

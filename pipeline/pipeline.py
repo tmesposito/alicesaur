@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import platform
 import sys
 import shutil
 import pdb
@@ -9,6 +10,7 @@ import json
 import numpy as np
 from glob import glob
 from tqdm import tqdm
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import SymLogNorm
 from astropy.io import ascii, fits
@@ -22,12 +24,20 @@ from scipy.stats import median_abs_deviation
 from alicesaur import pipeline
 from alicesaur.psfsub import stis_psfsub
 from alicesaur import utils
-from alicesaur.calibration.bad_pix import fix_bad_dq_knn
+from alicesaur.calibration.cti import CTI
+from alicesaur.calibration.bad_pix import fix_bad_dq_knn, mask_bad_pix
+from alicesaur.calibration.distortion import correct_distortion
 from alicesaur.calibration.align import find_star_radon, shift_pix_to_pix
 from alicesaur.calibration.flux import convert_intensity
-from alicesaur.calibration.distortion import correct_distortion
 from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
 from alicesaur.improcess.manipulate import zero_pad
+from alicesaur.gaia.astrometry import main
+from alicesaur.gaia.gaia_utils import get_gaia_id
+
+
+# Set matplotlib backend based on OS.
+if platform.system() == 'Darwin':
+    matplotlib.use('MACOSX')
 
 
 # FIX ME!!! Temp legacy information identifying STIS survey datasets that
@@ -262,7 +272,9 @@ class Pipeline(object):
                         target_names.append(hdu.header.get('TARGNAME', ''))
 
                     if plot_images and hdu.data is not None and hdu.is_image:
-                        plt.imshow(hdu.data, cmap='gray',norm=SymLogNorm(vmin=0.01, vmax=100, linthresh = 0.01))
+                        plt.imshow(hdu.data, cmap='gray',
+                                   norm=SymLogNorm(vmin=0.01, vmax=100,
+                                                   linthresh = 0.01))
                         plt.colorbar()
                         plt.title('HDU: ' + hdu.header.get('EXTNAME', 'N/A'))
                         plt.show()
@@ -275,21 +287,71 @@ class Pipeline(object):
             err_headers.append(crsplits_hdrs_err)
             dq_headers.append(crsplits_hdrs_dq)
 
+        # Check if all images have the same number of CRSPLITS.
+        n_crsplits = np.array([len(ii) for ii in sci_data])
+        if len(np.unique(n_crsplits)) > 1:
+            print("WARNING: Uneven numbers of CRSPLITS among input images:" \
+                  f"{n_crsplits}")
+            # max_crsplits = max(n_crsplits)
+        #     print(f"Inserting empty CRSPLITS to reach {max_crsplits} for all")
+        #     for ii, ncr in enumerate(n_crsplits):
+        #         if ncr < max_crsplits:
+        #             sci_data[ii].append(np.nan*np.ones(sci_data[ii][0].shape))
+        #             err_data[ii].append(np.nan*np.ones(err_data[ii][0].shape))
+        #             dq_data[ii].append(np.nan*np.ones(dq_data[ii][0].shape))
+        #             # for jj in range(3):
+        #             #     all_headers.append({'EXTNAME':'EMPTY'})
+        #             sci_headers[ii].append({'EXTNAME':'EMPTY'})
+        #             err_headers[ii].append({'EXTNAME':'EMPTY'})
+        #             dq_headers[ii].append({'EXTNAME':'EMPTY'})
+            min_crsplits = min(n_crsplits)
+            print(f"Trimming extra CRSPLITS to reach {min_crsplits} for all")
+            for ii, ncr in enumerate(n_crsplits):
+                if ncr > min_crsplits:
+                    sci_data[ii] = sci_data[ii][:min_crsplits]
+                    err_data[ii] = err_data[ii][:min_crsplits]
+                    dq_data[ii] = dq_data[ii][:min_crsplits]
+                    all_headers[ii] = all_headers[ii][:3*min_crsplits+1]
+                    sci_headers[ii] = sci_headers[ii][:min_crsplits+1]
+                    err_headers[ii] = err_headers[ii][:min_crsplits]
+                    dq_headers[ii] = dq_headers[ii][:min_crsplits]
+
         sci_data = np.array(sci_data)
         err_data = np.array(err_data)
         dq_data = np.array(dq_data)
 
-        print(f"\nNumber of CRSPLITS per FITS: {[len(ii) for ii in sci_data]}")
+        # Convert DQ values to binary strings to read the individual flags.
+        # Only do this if bad pixels are going to be fixed.
+        if not self.noFixPix:
+            print("Reading DQ array binary flags...")
+            dq_binary = np.empty(dq_data.shape, dtype='U14')
 
-        if dq_data.size > 0:
-            dq_bool_16 = dq_data == 16
-            dq_bool_8192 = dq_data == 8192
+            for index in np.ndindex(dq_data.shape):
+                dq_binary[index] = f"{dq_data[index]:014b}"
+            dq_bool_16 = np.zeros(dq_binary.shape, dtype=bool)
+            dq_bool_8192 = dq_bool_16.copy()
+            for index in np.ndindex(dq_binary.shape):
+                # Binary string is read from the right, so -5th element in from the
+                # right is the 16 bit. 0th element is the 8192 bit.
+                dq_bool_16[index] = dq_binary[index][-5] == '1'
+                dq_bool_8192[index] = dq_binary[index][0] == '1'
 
-            n_dq_16 = np.sum(np.sum(dq_bool_16, axis=3), axis=2)
-            n_dq_8192 = np.sum(np.sum(dq_bool_8192, axis=3), axis=2)
+            print(f"\nNumber of CRSPLITS per FITS: {[len(ii) for ii in sci_data]}")
 
-            print(f"\nDQ 16 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_16}")
-            print(f"\nDQ 8192 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_8192}")
+            if dq_data.size > 0:
+
+                n_dq_16 = np.sum(np.sum(dq_bool_16, axis=3), axis=2)
+                n_dq_8192 = np.sum(np.sum(dq_bool_8192, axis=3), axis=2)
+
+                print(f"\nDQ 16 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_16}")
+                print(f"\nDQ 8192 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_8192}")
+
+                print("DQ flag : total count in dataset")
+                for flag in np.unique(dq_binary):
+                    print(f"{int(flag, 2)} : {np.sum(dq_binary==flag)}")
+        else:
+            dq_bool_16 = np.zeros(dq_data.shape, dtype=bool)
+            dq_bool_8192 = np.zeros(dq_data.shape, dtype=bool)
 
         if scienceOnly:
             return sci_data, sci_headers, np.array(target_names)
@@ -297,21 +359,21 @@ class Pipeline(object):
             return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, all_headers, sci_headers, err_headers, dq_headers, np.array(target_names)
 
 
-    def pixelfixing(self, data, dq_8192_mask=None, dq_masks=[], verbose=False):
+    def pixelfixing(self, data, dq_8192_mask=None, dq_masks=[],
+                    fix_other=False, verbose=False):
         """
         Fix bad pixels iteratively in all images.
         """
-
-        # Number of 8192 flagged pixels in each CRSPLIT.
-        n_dq_8192 = np.sum(np.sum(dq_8192_mask, axis=3), axis=2)
-        med_8192 = np.nanmedian(n_dq_8192)
-        # std_8192 = np.nanstd(n_dq_8192)
 
         data_fixed = data.copy()
         # Fix the DQ=8192 pixels separately.
         if dq_8192_mask is not None:
             if data.ndim > 3:
-                for ii, da in tqdm(enumerate(data_fixed), desc="flt fixed for DQ=8192 bad pixels"):
+                # Number of 8192 flagged pixels in each CRSPLIT.
+                n_dq_8192 = np.sum(np.sum(dq_8192_mask, axis=3), axis=2)
+                med_8192 = np.nanmedian(n_dq_8192)
+                # std_8192 = np.nanstd(n_dq_8192)
+                for ii, da in tqdm(enumerate(data_fixed), desc="Fixing DQ=8192 bad pixels"):
                     for jj in range(da.shape[0]):
                         # Check for unusually high number of pixels
                         # with 8192 DQ flag, which can sometimes be
@@ -331,13 +393,23 @@ class Pipeline(object):
         # Then fix all other DQ flags.
         for dqm in dq_masks:
             if data.ndim > 3:
-                for ii, da in tqdm(enumerate(data_fixed), desc="flt fixed for other bad pixels"):
+                for ii, da in tqdm(enumerate(data_fixed), desc="Fixing other DQ flagged bad pixels"):
                     for jj in range(da.shape[0]):
                         data_fixed[ii][jj] = fix_bad_dq_knn(da[jj],
-                                                dqm[ii][jj], k=5,
-                                                max_distance=np.inf,
+                                                dqm[ii][jj], k=9,
+                                                max_distance=30,
                                                 iterate=True,
                                                 verbose=verbose)
+
+        if fix_other:
+            if data.ndim > 3:
+                for ii, da in tqdm(enumerate(data_fixed), desc="Fixing other (non-DQ) bad pixels"):
+                    for jj in range(da.shape[0]):
+                        data_fixed[ii][jj] = mask_bad_pix(data_fixed[ii][jj],
+                                                    inst=None, Nsig=7,
+                                                    neighborDist=1,
+                                                    low_only=False,
+                                                    iterate=True)
 
         return data_fixed
 
@@ -751,7 +823,12 @@ class Pipeline(object):
                         if hdul[ii].header.get('EXTNAME', '') == 'SCI':
                             sciInds.append(ii)
                     for ii in range(len(newData)):
-                        hdul[sciInds[ii]].data = newData[ii].astype(np.float32)
+                        # if not np.all(np.isnan(newData[ii])):
+                        if ii >= len(sciInds):
+                            for jj in range(3):
+                                hdul.append(fits.ImageHDU(data=newData[ii].astype(np.float32)))
+                        else:
+                            hdul[sciInds[ii]].data = newData[ii].astype(np.float32)
 
             hdul.flush()
 
@@ -891,7 +968,9 @@ class Pipeline(object):
 
         # Create headers for all data extensions.
         for ii, da in enumerate(data):
-            bitpix = headers[ii]['BITPIX']
+            if (np.all(np.isnan(da)) | np.all(da == 0)):
+                continue
+            bitpix = headers[ii].get('BITPIX')
             # Enforce data types to stabilize file size.
             if bitpix in [8, 16, 32, 64]:
                 hdul.append(fits.ImageHDU(data=np.array(da).astype(f'uint{bitpix}'), header=headers[ii].copy()))
@@ -913,11 +992,11 @@ class Pipeline(object):
             hdu.header['TARGNAME'] = (newPriHdr.get('TARGNAME', ''))
             hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
             hdu.header['FILETYPE'] = (filetype)
-            hdu.header['NCOMBINE'] = (1, 'Number of images combined')
             hdu.header['INPUTTYP'] = (self.inputType, 'Type of input data')
             hdu.header['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
 
             if hdu.header.get('EXTNAME', '') == 'SCI':
+                hdu.header['NCOMBINE'] = (1, 'Number of images combined')
                 hdu.header['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
                 hdu.header['ORBCOMBI'] = (not self.noCombine, 'Stacked images per orbit before PSF sub?')
                 hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
@@ -1002,7 +1081,8 @@ class Pipeline(object):
         hdu.header['TARGNAME'] = (self.targ)
         hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
         hdu.header['FILETYPE'] = (filetype)
-        hdu.header['NCOMBINE'] = (self.nSci, 'Number of images combined')
+        hdu.header['NCOMBINE'] = (self.sciHdrs[0][1].get('NCOMBINE', 1),
+                                  'Number of images combined')
         hdu.header['INPUTTYP'] = (self.inputType, 'Type of input data')
         hdu.header['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
         # hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
@@ -1047,7 +1127,7 @@ class Pipeline(object):
                                + str(self.orientats).replace('\n', ''))
         hdu.header.add_comment(cmt1)
         hdu.header.add_comment('Reduction info file: {}'.format(self.infoPath))
-        hdu.header.add_comment(f'Image integration times (s): {self.exptimes_all_s}')
+        hdu.header.add_comment(f'Image integration times (s): {self.exptimes_all_s}'.replace('\n', ' '))
 
         hdu.writeto(self.dataDir + saveName, overwrite=True)
         print(f"\n{filetype} saved as {self.dataDir + saveName}")
@@ -1086,26 +1166,34 @@ class Pipeline(object):
             filetype = 'SNR map for final combined PSF-subtracted image'
             cmt1 = f'{self.psfSubMode} PSF-subtracted SNR map'
 
-        hdu = fits.PrimaryHDU(data=np.array(data).astype('float32'))
-        if not 'HISTORY' in hdu.header:
+        if np.array(data).ndim > 3:
+            hdul = fits.HDUList()
+            priHdu = fits.PrimaryHDU()
+            newPriHdr = priHdu.header
+            newPriHdr['FILENAME'] = os.path.basename(saveName)
+            hdul.append(fits.PrimaryHDU(header=newPriHdr))
+        else:
+            hdu = fits.PrimaryHDU(data=np.array(data).astype('float32'))
+            newPriHdr = hdu.header
+        if not 'HISTORY' in newPriHdr:
             try:
-                hdu.header.add_history('Created by {}'.format(getpass.getuser()))
+                newPriHdr.add_history('Created by {}'.format(getpass.getuser()))
             except:
-                hdu.header.add_history('Created by unknown user')
-        hdu.header['TARGNAME'] = (self.targ)
-        hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
-        hdu.header['FILETYPE'] = (filetype)
-        hdu.header['NCOMBINE'] = (self.nSci, 'Number of images combined')
-        hdu.header['INPUTTYP'] = (self.inputType, 'Type of input data')
-        hdu.header['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
-        hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
-        hdu.header['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
-        hdu.header['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
-        hdu.header['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
-        hdu.header['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
-        hdu.header['TEXPTIME'] = (np.sum(self.exptimes_s), 'Total combined integration time in s')
-        hdu.header['BUNIT'] = (self.bunit, 'brightness units')
-        hdu.header['PHOTFLAM'] = (self.photflam_avg, 'inverse sensitivity, ergs/s/cm2/Ang per count/s')
+                newPriHdr.add_history('Created by unknown user')
+        newPriHdr['TARGNAME'] = (self.targ)
+        newPriHdr['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
+        newPriHdr['FILETYPE'] = (filetype)
+        newPriHdr['NCOMBINE'] = (self.sciHdrs[0][1].get('NCOMBINE', 1), 'Number of images combined')
+        newPriHdr['INPUTTYP'] = (self.inputType, 'Type of input data')
+        newPriHdr['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
+        newPriHdr['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
+        newPriHdr['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
+        newPriHdr['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
+        newPriHdr['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
+        newPriHdr['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
+        newPriHdr['TEXPTIME'] = (np.sum(self.exptimes_s), 'Total combined integration time in s')
+        newPriHdr['BUNIT'] = (self.bunit, 'brightness units')
+        newPriHdr['PHOTFLAM'] = (self.photflam_avg, 'inverse sensitivity, ergs/s/cm2/Ang per count/s')
         # Propagate certain keys from individual raw FITS.
         for key in ['TELESCOP', 'INSTRUME','EQUINOX','RA_TARG', 'DEC_TARG',
                     'PROPOSID', 'TDATEOBS',
@@ -1114,43 +1202,56 @@ class Pipeline(object):
                     'APERTURE', 'PROPAPER', 'FILTER', 'APER_FOV',
                     'CRSPLIT', 'PHOTZPT', 'PHOTPLAM', 'PHOTBW', ]:
             try:
-                hdu.header[key] = (self.sciHdrs[0][0][key],
+                newPriHdr[key] = (self.sciHdrs[0][0][key],
                                    self.sciHdrs[0][0].comments[key])
             except:
                 print(f"Could not propagate header keyword {key}")
         if self.bgCen is not None:
-            hdu.header['BGCENTY'] = (self.bgCen[0], 'Science Y center background sample')
-            hdu.header['BGCENTX'] = (self.bgCen[1], 'Science X center background sample')
+            newPriHdr['BGCENTY'] = (self.bgCen[0], 'Science Y center background sample')
+            newPriHdr['BGCENTX'] = (self.bgCen[1], 'Science X center background sample')
         else:
-            hdu.header['BGCENTY'] = (None, 'Science Y center background sample')
-            hdu.header['BGCENTX'] = (None, 'Science X center background sample')
+            newPriHdr['BGCENTY'] = (None, 'Science Y center background sample')
+            newPriHdr['BGCENTX'] = (None, 'Science X center background sample')
         if self.bgCenRef is not None:
-            hdu.header['BGCENTYR'] = (self.bgCenRef[0], 'Reference Y center background sample')
-            hdu.header['BGCENTXR'] = (self.bgCenRef[1], 'Reference X center background sample')
+            newPriHdr['BGCENTYR'] = (self.bgCenRef[0], 'Reference Y center background sample')
+            newPriHdr['BGCENTXR'] = (self.bgCenRef[1], 'Reference X center background sample')
         else:
-            hdu.header['BGCENTYR'] = (None, 'Reference Y center background sample')
-            hdu.header['BGCENTXR'] = (None, 'Reference X center background sample')
-        hdu.header['BGRADIUS'] = (self.bgRadius, 'Radius background sample region (pix)')
-        hdu.header['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
-        hdu.header['ORBCOMBI'] = (not self.noCombine, 'Stacked images per orbit before PSF sub?')
-        hdu.header['ANNULI'] = (self.ann, 'Number of subtraction region annuli')
-        hdu.header['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
-        hdu.header['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
-        hdu.header.add_comment('Constituent image ORIENTAT angles: '\
+            newPriHdr['BGCENTYR'] = (None, 'Reference Y center background sample')
+            newPriHdr['BGCENTXR'] = (None, 'Reference X center background sample')
+        newPriHdr['BGRADIUS'] = (self.bgRadius, 'Radius background sample region (pix)')
+        newPriHdr['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
+        newPriHdr['ORBCOMBI'] = (not self.noCombine, 'Stacked images per orbit before PSF sub?')
+        newPriHdr['ANNULI'] = (self.ann, 'Number of subtraction region annuli')
+        newPriHdr['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
+        newPriHdr['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
+        newPriHdr.add_comment('Constituent image ORIENTAT angles: '\
                                + str(self.orientats[self.sciInds]).replace('\n', ''))
         if self.subFinalRadProf and imType in ['final']:
-            hdu.header.add_comment('Post-collapse radial profile subtracted')
-        hdu.header.add_comment(cmt1)
-        hdu.header.add_comment('Reduction info file: {}'.format(self.infoPath))
+            newPriHdr.add_comment('Post-collapse radial profile subtracted')
+        newPriHdr.add_comment(cmt1)
+        newPriHdr.add_comment('Reduction info file: {}'.format(self.infoPath))
         try:
-            hdu.header.add_comment('PSF-subtraction scale factors for reference images by science image: ' \
+            newPriHdr.add_comment('PSF-subtraction scale factors for reference images by science image: ' \
                                    + str(np.round(self.refScaleFactors, 5)).replace('\n', ''))
         except:
-            hdu.header.add_comment('PSF-subtraction scale factors for reference images by science image: ' \
+            newPriHdr.add_comment('PSF-subtraction scale factors for reference images by science image: ' \
                                    + str(self.refScaleFactors).replace('\n', ''))
-        hdu.header.add_comment(f'Constituent image exposure times (s): {self.exptimes_s}')
+        newPriHdr.add_comment(f'Constituent image exposure times (s): {self.exptimes_s}')
 
-        hdu.writeto(self.dataDir + saveName, overwrite=True)
+        if np.array(data).ndim > 3:
+            # Create headers for all data extensions.
+            for ii, da in enumerate(data):
+                # if (np.all(np.isnan(da)) | np.all(da == 0)):
+                #     continue
+                # Enforce data types to stabilize file size.
+                hdul.append(fits.ImageHDU(data=np.array(da).astype('float32'), header=newPriHdr.copy()))
+                hdr = hdul[-1].header
+                if ii == 0:
+                    hdr['FILETYPE'] = ('Final combined PSF-subtracted image')
+        else:
+            hdu.writeto(self.dataDir + saveName, overwrite=True)
+
+
         print(f"\n{filetype} saved as {self.dataDir + saveName}")
 
         return
@@ -1160,6 +1261,11 @@ class Pipeline(object):
         """
         Run the complete reduction pipeline from start to finish.
         """
+
+        if not self.saveFinal:
+            print("\nWARNING: Final products will NOT be saved to disk "\
+                  "because saveFinal==False. Add --saveFinal to the main "\
+                  "script if you want to save these files.\n")
 
 # TEMP!!! Clean this up later to just use the self attributes directly.
         obsMode = self.obsMode
@@ -1205,42 +1311,44 @@ class Pipeline(object):
 
     # ========== CHARGE TRANSFER INEFFICIENCY CORRECTION ========== #
 
-# TEMP!!!
-        self.fixCTI = True
-        if self.fixCTI:
-            # Create CTI object instance
-            # cti = CTI()
-            # Correct the flt files, creating new "flc.fits" files
-# FIX ME!!!
-            # Placeholder for the CTI correction.
-            if self.inputType == 'flt':
-                newSuffix = 'flc'
-            elif self.inputType == 'xft':
-                newSuffix = 'xfc'
-            elif self.inputType == 'axt':
-                newSuffix = 'axc'
-            elif self.inputType == 'sx2':
-                newSuffix = 's2c'
-            elif self.inputType in ['flc', 'xfc', 'axc', 's2c']:
-                print(f"\n{self.inputType} images already CTI-corrected; will"\
-                      " not correct them again")
-            else:
-                newSuffix = 'idk'
+        if not self.noFixCTI:
 
-            if self.inputType in ['flt', 'xft', 'axt', 'sx2']:
-                for pth in self.fileList:
-                    newPth = os.path.join(os.path.dirname(pth),
-                                          os.path.basename(pth).replace(f'_{self.inputType}.',
-                                                                        f'_{newSuffix}.'))
-                    shutil.copyfile(pth, newPth)
-                    print(f"Wrote new CTI-corrected file to {newPth}")
-# FIX ME END!!!
+            # Correct the flt files, creating new "flc.fits" files
+            if self.inputType in ['flc', 'xfc', 'axc', 's2c']:
+                print(f"\n{self.inputType} images already CTI-corrected; will"\
+                      " not correct them again\n")
+            # Check that proposal IDs are provide. If not, skip correction.
+            elif len(self.pids) == 0:
+                print("\nWARNING: No proposal IDs given, so we are skipping "\
+                      "CTI correction. Use main_reduce_stis.py --pids [#####]"\
+                      " if you want to fetch MAST data for CTI correction.\n")
+            else:
+                # Create CTI object instance; set up directories and environment.
+                stisCTI = CTI(obsMode=self.obsMode)
+                stisCTI.setup_directories(base_dir=self.dataDir)
+                stisCTI.setup_env()
+
+                # Do the CTI correction.
+                stisCTI.run_cti(self.pids, target_name=self.targ, clean=True)
 
                 # Update the inputType.
-                self.inputType = newSuffix
+                if self.inputType == 'flt':
+                    newSuffix = 'flc'
+                elif self.inputType == 'xft':
+                    newSuffix = 'xfc'
+                elif self.inputType == 'axt':
+                    newSuffix = 'axc'
+                elif self.inputType == 'sx2':
+                    newSuffix = 's2c'
+                else:
+                    newSuffix = 'idk'
+
+                if self.inputType in ['flt', 'xft', 'axt', 'sx2']:
+                    self.inputType = newSuffix
 
             # Update the image paths based on CTI correction.
             self.find_imgs(suffix=self.inputType)
+
 
     # ========== LOAD IMAGES ========== #
 
@@ -1272,11 +1380,29 @@ class Pipeline(object):
 
     # ========== BAD PIXEL FIXING ========== #
 
+# FIX ME!!! Turn these hard-coded DQ fixing flags into input options.
+# DQ=8192 flags (cosmic-ray rejection) are not fixed by default because they
+# are too agressive, including real sources like stars and diffraction spikes.
+            fix_dq_16 = True
+            fix_dq_8192 = False
+
+            if fix_dq_8192:
+                dq_8192_mask = dq_bool_8192
+            else:
+                dq_8192_mask = None
+
             # Fix bad pixels based on data quality flags from FITS.
             if not self.noFixPix:
-                sci_data = self.pixelfixing(sci_data, dq_8192_mask=dq_bool_8192,
-                                            dq_masks=[dq_bool_16],
-                                            verbose=True)
+                if fix_dq_16:
+                    sci_data = self.pixelfixing(sci_data,
+                                                dq_8192_mask=dq_8192_mask,
+                                                dq_masks=[dq_bool_16],
+                                                fix_other=True, verbose=True)
+                else:
+                    sci_data = self.pixelfixing(sci_data,
+                                                dq_8192_mask=dq_8192_mask,
+                                                dq_masks=[],
+                                                fix_other=True, verbose=True)
 
                 # Overwrite input FITS cube with the pixel-fixed CRSPLIT images.
                 for ii, fp in enumerate(self.fileList):
@@ -1404,8 +1530,16 @@ class Pipeline(object):
         self.alignStarOffsetsAll = []
         alignMasksAll = []
         if self.inputType in ['flt', 'flc', 'xft', 'xfc']:
-            for ii in range(sci_data.shape[0]):
+            for ii in range(len(sci_data)):
                 # imgsPadded = self.pad_imgs(sci_data[ii], outputShape=(1100,1100), fill=0.)
+
+                # # Pop off "empty" images before alignment.
+                # empty_to_remove = []
+                # for jj in range(len(sci_data[ii])):
+                #     if np.all(np.isnan(sci_data[ii][jj])):
+                #         empty_to_remove.append(jj)
+                # for ind in empty_to_remove[::-1]:
+                #     sci_data[ii].pop(ind)
 
                 alignImgs, alignMasks = self.align_imgs(sci_data[ii],
                                                     indImg=ii, masks=[],
@@ -1473,7 +1607,7 @@ class Pipeline(object):
             self.starsOriginal = np.array(self.starsOriginal)
             self.alignStarOffsets = self.stars - self.starsOriginal
 
-            for ii in range(sci_data.shape[0]):
+            for ii in range(len(sci_data)):
                 # imgsPadded = self.pad_imgs(sci_data[ii], outputShape=(1100,1100), fill=0.)
                 alignMasks = shift_pix_to_pix(occultMask, self.starsOriginal[ii],
                                               finalYX=self.alignStar,
@@ -1482,39 +1616,14 @@ class Pipeline(object):
                 alignMasksAll.append(alignMasks.copy())
             alignMasks = np.array(alignMasksAll)
 
-# FIX ME!!! Need to get original star centers from aligned fits headers
-# in order to align masks, if input images are aligned already.
-
-#         # Align occulter masks with aligned images.
-# # TEMP!!! Stick with 1100x1100 arrays for simplicity to start.
-#         #     # Define new aligned star position.
-#         #     if pad:
-#         #         matSize = np.array([2048, 2048])
-#         #         alignStar = matSize//2
-#         #     else:
-#         #         matSize = None
-#         #         alignStar = np.round(self.stars[0])
-#         matSize = self.imgShape
-#         alignMasks = []
-#         for ii in tqdm(range(len(self.workingImgs)), desc="Aligning masks"):
-#             alignMasks.append(shift_pix_to_pix(occultMask, self.starsOriginal[ii],
-#                                                 finalYX=self.alignStar, outputSize=matSize,
-#                                                 order=1, fill=-1e4))
-#         alignMasks = np.array(alignMasks)
-
 
     # ==== BACKGROUND SUBTRACTION ==== #
-
-# # FIX ME!!! Add option here to do background subtraction from the individual CRSPLITS
-#             self.bgSubSplits = True
-#             if self.bgSubSplits:
-#                 pass
 
         # Subtract background/sky.
         if self.bgCen is not None:
             print("\nSubtracting background from all images...")
             self.subtract_background(noOffsetDatasets=noOffsetDatasets)
-            print("Background means subtracted: {}".format(self.bgs))
+            print("Background means subtracted:\n{}".format(self.bgs))
         else:
             print("Skipping background subtraction (bgCen is None)")
 
@@ -1524,12 +1633,9 @@ class Pipeline(object):
 # FIX ME!!! CRSPLIT combination should move to a method eventually.
         # Combine CRSPLITS into one "integrated" image per FITS.
 # FIX ME!!! Should maybe base the logic here on the dimensions of the input
-# files rather than their suffixes. If 
+# files rather than their suffixes.
         if self.inputType in ['flt', 'flc', 'alt', 'alc', 'axt', 'axc']:
             print("\nCombining CRSPLITS into unified images...")
-# TEMP!!! TESTING DIFFERENT CLEANING AND UNIFICATION METHODS.
-            # unifiedImgs = np.mean(sci_data, axis=1)
-            # unifiedImgs = np.median(sci_data, axis=1)
             yy, xx = np.ogrid[:sci_data[0].shape[1], :sci_data[0].shape[2]]
             for ii in tqdm(range(sci_data.shape[0]), desc="Images being unified"):
                 # # Clip highest valued pixel in every CRSPLIT stack.
@@ -1548,18 +1654,25 @@ class Pipeline(object):
                 # sci_data[ii][np.where(nsigma > 5), yy, xx] = np.nan
                 # sci_data[ii][nsigma > 5] = np.nan
                 sci_data[ii][nmad > 5] = np.nan
+            # Get an array of the number of CRSPLITS per image.
+            n_crsplits = np.array([hdr[0].get('CRSPLIT') for hdr in sci_headers])
+            # Average together the CRSPLITS.
             unifiedImgs = np.nanmean(sci_data, axis=1)
 
             for ii in range(sci_data.shape[0]):
+                # Update headers for the unified images to reflect correct
+                # number of combined CRSPLITS.
+                for jj in range(1,len(sci_headers[ii])):
+                    sci_headers[ii][jj]['NCOMBINE'] = n_crsplits[ii]
                 imgsHdrs[0].append([None, unifiedImgs[ii]])
-                imgsHdrs[1].append(sci_headers[ii])
+                imgsHdrs[1].append(sci_headers[ii][:2])
 
             del unifiedImgs # don't need this anymore
 
 
         # Zero-pad images to uniform dimensions, depending on instrument.
         if self.instrument == 'stis':
-            outsize = np.array([1100, 1100])
+            outsize = np.array([2048, 2048])
             for ii in range(len(imgsHdrs[0])):
                 im = imgsHdrs[0][ii][1]
                 if im.shape != tuple(outsize):
@@ -1572,69 +1685,7 @@ class Pipeline(object):
             # Update header image dimensions and WCS reference coordinates.
             imgsHdrs[1] = self.update_dimensions([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))],
                                                   imgsHdrs[1])
-# TEMP END!!!
 
-# FIX ME!!! DEPRECATED BY similar code run earlier (after data are loaded).
-#         # Get input image intensity units.
-#         self.bunit = imgsHdrs[1][0][1]['BUNIT']
-
-#         # Separate science frames from PSF reference frames via the target name.
-#         self.sciInds = np.where(np.char.lower(targs) == targ.lower())[0]
-#         self.refInds = np.where(np.char.lower(targs) != targ.lower())[0]
-#         # Number of input science and reference frames (before any combinations)
-#         self.nSci = np.size(self.sciInds)
-#         self.nRef = np.size(self.refInds)
-
-#         print("\nScience image indices: {}".format(self.sciInds))
-#         print("Ref image indices ({}): {}\n".format(targs[self.refInds], self.refInds))
-
-#         # Get UT observation date, proposed aperture name, orientat angles, and
-#         # rough star coordinates from headers.
-#         self.obsDate = imgsHdrs[1][self.sciInds[0]][0]["TDATEOBS"] # [UT]
-#         self.propAper = imgsHdrs[1][self.sciInds[0]][0]["PROPAPER"]
-#         self.orientats = np.array([imgsHdrs[1][ii][1]["ORIENTAT"] for ii in range(len(imgsHdrs[0]))])
-# # FIX ME!!! Need to fully switch to using the self.orientats attribute.
-#         orientats = self.orientats
-
-#         self.exptimes_all_s = [ii[0].get('TEXPTIME', -1) for ii in imgsHdrs[1]] # [s]
-#         self.exptimes_s = [imgsHdrs[1][ii][0].get('TEXPTIME', -1) for ii in self.sciInds] # [s]
-#         self.photflam_avg = np.mean([imgsHdrs[1][ii][0].get('PHOTFLAM', -1.) for ii in self.sciInds])
-
-        # # Zero-pad images to uniform dimensions, depending on instrument.
-        # if self.instrument == 'stis':
-        #     outsize = np.array([1100, 1100])
-        #     for ii in range(len(imgsHdrs[0])):
-        #         im = imgsHdrs[0][ii][1]
-        #         if im.shape != tuple(outsize):
-        #             imgsHdrs[0][ii][1] = zero_pad(im, outsize=outsize,
-        #                                           method='simple')
-        #             for jj, hdr in enumerate(imgsHdrs[1][ii]):
-        #                 if 'CRPIX1' in hdr.keys():
-        #                     imgsHdrs[1][ii][jj]['CRPIX1'] += (outsize[1] - im.shape[1])//2 # x
-        #                     imgsHdrs[1][ii][jj]['CRPIX2'] += (outsize[0] - im.shape[0])//2 # y
-        #     # Update header image dimensions and WCS reference coordinates.
-        #     imgsHdrs[1] = self.update_dimensions([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))],
-        #                                           imgsHdrs[1])
-
-        # # Either force star position or estimate based on headers.
-        # if self.forceStar:
-        #     self.starFromWCS = self.starToUse
-        # else:
-        #     self.starFromWCS_list = []
-        #     for ii, hdr in enumerate(imgsHdrs[1]):
-        #         # Get estimate of star position from target RA/Dec and WCS in header.
-        #         ww = wcs.WCS(hdr[1])
-        #         targRA = hdr[0]['RA_TARG']
-        #         targDec = hdr[0]['DEC_TARG']
-        #         self.starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
-        #     self.starFromWCS = np.mean(self.starFromWCS_list, axis=0)
-
-        # # Check number of images per fits file.
-        # nImgsPerFits = [len(imgsHdrs[0][ii]) for ii in range(len(imgsHdrs[0]))]
-        # print("Data arrays per fits file: {}".format(nImgsPerFits))
-
-        # # Separate images into their own 3-d array. Includes Sci and Ref images.
-        # allImgs = np.array([imgsHdrs[0][ii][1] for ii in range(len(imgsHdrs[0]))])
 
         # Separate images into their own 3-d array. Includes Sci and Ref images.
         # Then define them as the current working images.
@@ -1649,6 +1700,7 @@ class Pipeline(object):
         if self.saveAuxiliary:
             self.save_unified_to_fits([ii[1] for ii in imgsHdrs[0]], unit='DN')
 
+
     # ========== CALIBRATE FLUX ========== #
         # Convert intensity to counts per second.
         newUnit = 'COUNTS S-1'
@@ -1659,46 +1711,12 @@ class Pipeline(object):
         self.bunit = newUnit
         print("Converted image intensity units to {}".format(newUnit))
 
+
     # ========== AVERAGE IMAGES BY ORBIT ========== #
         # Combine individual exposures in an orbit to make one image.
         # Redefine orientats and indices based on these combined images.
         if (not noCombine) and (psfSubMode.lower() not in ['pyklip-rdi']):
             self.workingImgs, orientats = self.combineOrbitImgs(self.workingImgs, orientats)
-
-
-    # # ==== ALIGN IMAGES TO COMMON STAR POSITION ==== #
-
-    #     # Find the occulted star's coordinates in every image.
-    #     self.find_star(orbitImgs, occultMask)
-
-    #     # Define new aligned star position.
-    #     if pad:
-    #         matSize = np.array([2048, 2048])
-    #         alignStar = matSize//2
-    #     else:
-    #         matSize = None
-    #         alignStar = np.round(self.stars[0])
-    #     self.alignStar = alignStar
-
-    #     # Register images to align stars.
-    #     # Also pad the images to matSize if self.noPad is not set.
-    #     print("\nAligning images and masks to common star position...")
-    #     alignImgs = []
-    #     alignMasks = []
-    #     for ii in tqdm(range(len(orbitImgs)), desc="Aligned images"):
-    #         alignImgs.append(shift_pix_to_pix(orbitImgs[ii], self.stars[ii],
-    #                                           finalYX=self.alignStar, outputSize=matSize,
-    #                                           order=3, fill=0.))
-    #         alignMasks.append(shift_pix_to_pix(occultMask, self.stars[ii],
-    #                                            finalYX=self.alignStar, outputSize=matSize,
-    #                                            order=1, fill=-1e4))
-    #     alignImgs = np.array(alignImgs)
-    #     alignMasks = np.array(alignMasks)
-    #     # Preserve original star positions before overwriting stars with new
-    #     # aligned position. Keep the offsets around for posterity.
-    #     self.starsOriginal = self.stars.copy()
-    #     self.stars[:] = self.alignStar
-    #     self.alignStarOffsets = self.stars - self.starsOriginal
 
         if self.debug:
             fig = plt.figure(3)
@@ -1717,29 +1735,6 @@ class Pipeline(object):
                 plt.draw()
                 pdb.set_trace()
 
-        # # Update header WCS reference coordinates and image dimensions.
-        # self.update_wcs(alignImgs)
-
- # FIX ME!!! MOVED EARLIER. Should delete this bg sub snippet.
-    # # ==== BACKGROUND SUBTRACTION ==== #
-
-    #     # Subtract background/sky.
-    #     if self.bgCen is not None:
-    #         print("\nSubtracting background from all images...")
-    #         self.subtract_background(noOffsetDatasets=noOffsetDatasets)
-    #         print("Background means subtracted: {}".format(self.bgs))
-    #     else:
-    #         print("Skipping background subtraction (bgCen is None)")
-
-    # # BG TESTING!!!
-    #     plt.figure(5)
-    #     plt.clf()
-    #     for ii in self.workingImgs:
-    #         plt.imshow(ii, norm=SymLogNorm(linthresh=0.01, linscale=1, vmin=0, vmax=50))
-    #         plt.ylim(1024-100, 1024+101)
-    #         plt.xlim(1024-200, 1024+201)
-    #         plt.draw()
-    #         pdb.set_trace()
 
     # ==== CREATE IMAGE MASKS ==== #
 
@@ -1938,12 +1933,26 @@ class Pipeline(object):
                 radProfMax = None
                 self.subRadProf = False
 
+            # Estimate initial brightness scaling for reference PSFs.
+            sciImg_999 = np.percentile(self.workingImgs[self.sciInds][~psfSubMasks[self.sciInds]], 99.9)
+            refImg_999 = np.percentile(self.workingImgs[self.refInds][~psfSubMasks[self.refInds]], 99.9)
+            ratio_ref_sci = refImg_999/sciImg_999
+            print("\nRatio of reference PSF to science PSF brightness = "\
+                  f"{ratio_ref_sci:.3f}")
+            # Don't let ratio stray too far from unity.
+            if (ratio_ref_sci < 0.05) or (ratio_ref_sci > 20):
+                ratio_ref_sci = 1.
+            print(f"Using {ratio_ref_sci:.3f} as initial reference PSF "\
+                  "scaling ratio\n")
+            C0 = np.log10(ratio_ref_sci)
+
+            # Do the PSF subtraction.
             psfSubImgs, refScaleFactors = stis_psfsub.rdi_subtract_psf(
                                     self.workingImgs[self.sciInds],
                                     self.workingImgs[self.refInds],
                                     psfSubMasks[self.sciInds],
                                     psfSubMasks[self.refInds],
-                                    self.stars[self.sciInds], C0=-1.,
+                                    self.stars[self.sciInds], C0=C0,
                                     rmin=rmin, rmax=sub_r_out, ann=ann,
                                     deltaPAMin=self.deltaPAMin,
                                     orientats=orientats[self.sciInds],
@@ -1986,14 +1995,14 @@ class Pipeline(object):
                                     psfSubMasks_refs,
                                     self.stars[self.sciInds], self.deltaPAMin,
                                     self.orientats[self.sciInds],
-                                    C0=-1., rmin=rmin, rmax=sub_r_out, ann=ann,
+                                    C0=0., rmin=rmin, rmax=sub_r_out, ann=ann,
                                     radProfPaList=radProfPaList,
                                     radProfPaHW=radProfPaHW,
                                     radProfMax=radProfMax,
                                     radProfMasks=sourceMasks[self.sciInds],
                                     subRadProf=self.subRadProf,
                                     bgCen=self.bgCen, bgRadius=self.bgRadius,
-                                    optimize_dither=True)
+                                    optimize_dither=False)
             self.psfSubImgs = psfSubImgs
             self.refScaleFactors = refScaleFactors
 
@@ -2051,26 +2060,29 @@ class Pipeline(object):
         # Gaia positions.
         if self.do_gaia:
             print("\n*** Doing Gaia astrometry thingy ***\n")
-            from alicesaur.gaia.astrometry import main
-# FIX ME!!!Hardcoding the Gaia id for HD 114082 for now.
-# Change this astrometry code to accept the target name as input.
-            target_gaia_id = 6055854551117476480 #6072902994276659200 is HD-106906
-            target_rv = [0., 0.]
-            all_gaia_out = []
-            for ii, img in enumerate(self.psfSubImgs):
-                # Star input order is x,y
-                # Output order is:
-                # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
-                # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
-                # final_tn_std
-                gaia_out = main(f"{self.targ}_{self.obsMode}_{self.inputType}_{ii}",
-                                self.instrument, target_gaia_id, target_rv,
-                                self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
-                                exclude_extra=[], im=img, hdr=self.sciHdrs[ii][1],
-                                out_dir=self.dataDir)
-                all_gaia_out.append(gaia_out)
-                print(f"Gaia X: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
-
+            self.targSimbad = utils.format_target_name(self.targ)
+            gaiaID = get_gaia_id(self.targSimbad)
+            if gaiaID is not None:
+                gaiaIDNumber = int(gaiaID.split(' ')[-1])
+                # target_gaia_id = 6055854551117476480 #6072902994276659200 is HD-106906
+                target_rv = [0., 0.]
+                all_gaia_out = []
+                for ii, img in enumerate(self.psfSubImgs):
+                    # Star input order is x,y
+                    # Output order is:
+                    # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
+                    # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
+                    # final_tn_std
+                    gaia_out = main(f"{self.targ}_{self.obsMode}_{self.inputType}_{ii}",
+                                    self.instrument, gaiaIDNumber, target_rv,
+                                    self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
+                                    exclude_extra=[], im=img, hdr=self.sciHdrs[ii][1],
+                                    out_dir=self.dataDir)
+                    all_gaia_out.append(gaia_out)
+                    print(f"Gaia X: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
+            else:
+                print("FAILED: Could not measure Gaia astrometry: "\
+                      f"invalid Gaia ID number for target ({gaiaIDNumber})")
 
         if psfSubMode.lower() in ["adi", "rdi"]:
             # Apply mask for occulters and diffraction spikes to
