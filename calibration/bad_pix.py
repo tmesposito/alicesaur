@@ -2,15 +2,17 @@
 
 import pdb
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.ndimage import median_filter, generic_filter
 from scipy.spatial import cKDTree
+from scipy.stats import median_abs_deviation
 
 # Internal imports
 from alicesaur import utils
 
 
 def mask_bad_pix(im, inst=None, Nsig=7, neighborDist=5, thr_min=np.inf,
-                 low_only=False, negAlwaysBad=False,
+                 low_only=False, negAlwaysBad=False, Nmad=40,
                  iterate=False, iterThresh=0.0005, window=False):
     """
     Remove bad pixels by comparing their value to mean of neighbor pixels.
@@ -26,18 +28,14 @@ def mask_bad_pix(im, inst=None, Nsig=7, neighborDist=5, thr_min=np.inf,
         iterate: bool, True to iterate until fraction of bad pixels removed
             is < iterThresh.
         iterThresh: float, fraction of bad pixels allowed to stay.
+        window: (ymin, ymax, xmin, xmax) image coordinates bounding the
+            patch to fix.
 
     Output:
         numpy array with bad pixels = median of nearest neighbors.
     """
 
     print("\nMarking bad pixels (may take a few minutes)...")
-
-    # Create zero arrays same size as im but padded by 2 pixels on each side.
-    # Shift im around edge of an 8-pixel square, with starting point
-    # (0,0), to make 16 new arrays with differentially-shifted im.
-    # for yy in [-3, -2, 2, 3]:
-    #     for xx in [-3, -2, 2, 3]:
 
     if window:
         patch = im[window[0]-neighborDist:window[1]+neighborDist+1,
@@ -46,16 +44,10 @@ def mask_bad_pix(im, inst=None, Nsig=7, neighborDist=5, thr_min=np.inf,
         patch = im
 
     yx_list = []
-    for yy in range(-neighborDist, neighborDist+1): #[-3, -2, -1, 0, 1, 2, 3]:
-            for xx in range(-neighborDist, neighborDist+1): #[-3, -2, -1, 0, 1, 2, 3]:
-                if not (yy==0 and xx==0):
-                    yx_list.append((yy,xx))
-
-    # plt.figure(0)
-    # plt.clf()
-    # plt.imshow(im, vmin=-100, vmax=100)
-    # plt.title('Original')
-    # plt.draw()
+    for yy in range(-neighborDist, neighborDist+1):
+        for xx in range(-neighborDist, neighborDist+1):
+            if not (yy==0 and xx==0):
+                yx_list.append((yy,xx))
 
     badFrac = 1. # initialize fraction of bad pixels at 100%
     it = 0 # iteration count
@@ -79,13 +71,13 @@ def mask_bad_pix(im, inst=None, Nsig=7, neighborDist=5, thr_min=np.inf,
         # # (Note: equivalent to deprecated scipy.stats.nanstd(mat_list, axis=0, bias=True))
         # nebStd_mat = nanstd(mat_list, axis=0)
         # nebMeanArr = nanmean(mat_list, axis=0)
-        # nebMedianArr = np.nanmedian(mat_list, axis=0)
-        filtSize = 5
-
-        nebMedianArr = median_filter(patch, size=filtSize, mode='reflect')
+        nebMedianArr = np.nanmedian(mat_list, axis=0)
+        # filtSize = 5
+        # medFiltArr = median_filter(patch, size=filtSize, mode='reflect')
         # Calculate standard deviation of nearest neighbors (ignore NaN).
         # (Note: equivalent to deprecated scipy.stats.nanstd(mat_list, axis=0, bias=True))
         nebStdArr = np.nanstd(mat_list, axis=0)
+        # nebMadArr = median_abs_deviation(mat_list, axis=0)
 
         # # Trim padding off of nebMean_mat and nebStd_mat so they match shape of im.
         # # NOTE: intentionally starting at index 1, based on shifting above.
@@ -106,9 +98,60 @@ def mask_bad_pix(im, inst=None, Nsig=7, neighborDist=5, thr_min=np.inf,
         else:
             diff = np.abs(nebMedianArr - patch) - thresh
             if negAlwaysBad:
-                whb = np.where((diff > 0)  | (patch < 0))
+                whb = np.where((diff > 0) | (patch < 0))
             else:
-                whb = np.where((diff > 0)  | (patch < -5*np.nanmean(nebStdArr)))
+                whb = np.where((diff > 0) | (patch < -5*np.nanmean(nebStdArr)))
+
+        # sigmaMap = (patch - nebMedianArr)/nebStdArr
+        # # madMap = (patch - nebMedianArr)/nebMadArr
+
+        # plt.figure(1)
+        # plt.clf()
+        # plt.imshow(nebStdArr, vmin=0, vmax=500, origin='lower')
+        # plt.title('Standard deviation')
+        # plt.draw()
+
+        # # plt.figure(2)
+        # # plt.clf()
+        # # plt.imshow(medFiltArr, vmin=-500, vmax=500, origin='lower')
+        # # plt.title('Median filtered image')
+        # # plt.draw()
+
+        # plt.figure(7)
+        # plt.clf()
+        # plt.imshow(nebMedianArr, vmin=-500, vmax=500, origin='lower')
+        # plt.title('Neighbor median array')
+        # plt.draw()
+
+        # plt.figure(3)
+        # plt.clf()
+        # plt.imshow(patch - nebMedianArr, vmin=-100, vmax=100, origin='lower')
+        # plt.title('Original - Neighbor median')
+        # plt.draw()
+
+        # plt.figure(8)
+        # plt.clf()
+        # plt.imshow(diff, vmin=-100, vmax=100, origin='lower')
+        # plt.title('abs(Neighbor median - Original) - threshold')
+        # plt.draw()
+
+        # plt.figure(4)
+        # plt.clf()
+        # plt.imshow(sigmaMap, vmin=-Nsig, vmax=Nsig, origin='lower')
+        # plt.title('Sigma map ({} to {})'.format(-Nsig, Nsig))
+        # plt.draw()
+
+        # # plt.figure(5)
+        # # plt.clf()
+        # # plt.imshow(madMap, vmin=-Nmad, vmax=Nmad, origin='lower')
+        # # plt.title('MAD map ({} to {})'.format(-Nsig, Nsig))
+        # # plt.draw()
+
+        # # plt.figure(9)
+        # # plt.clf()
+        # # plt.imshow(whb, vmin=0, vmax=1, origin='lower')
+        # # plt.title('1 = Bad, 0 = Good')
+        # # plt.draw()
 
         # # Replace all "bad" pixels with NaN.
         # im[whb] = np.nan
@@ -131,46 +174,24 @@ def mask_bad_pix(im, inst=None, Nsig=7, neighborDist=5, thr_min=np.inf,
         else:
             it += 1
 
-        # sigmaMap = np.abs((nebMedianArr - patch)/nebStdArr)
-        # 
-        # plt.figure(1)
+        # plt.figure(6)
         # plt.clf()
-        # plt.imshow(nebStdArr, vmin=-10, vmax=10)
-        # plt.title('Std dev')
-        # plt.draw()
-        # 
-        # plt.figure(2)
-        # plt.clf()
-        # plt.imshow(nebMedianArr, vmin=-100, vmax=100)
-        # plt.title('Median filtered')
-        # plt.draw()
-        # 
-        # plt.figure(3)
-        # plt.clf()
-        # plt.imshow(patch - nebMedianArr, vmin=-10, vmax=10)
-        # plt.title('Original - Median')
-        # plt.draw()
-        # 
-        # plt.figure(4)
-        # plt.clf()
-        # plt.imshow(sigmaMap, vmin=-Nsig, vmax=Nsig)
-        # plt.title('Sigma map ({} to {})'.format(-Nsig, Nsig))
-        # plt.draw()
-        # 
-        # plt.figure(5)
-        # plt.clf()
-        # plt.imshow(patch, vmin=-100, vmax=100)
+        # plt.imshow(patch, vmin=-100, vmax=3000, origin='lower')
         # plt.title('Fixed original')
         # plt.draw()
-        # 
+
+        # plt.show()
         # pdb.set_trace()
 
     return im
 
 
+# DEPRECATED and slated for removal.
 def fix_bad_dq(im, dq_mask, inst=None, neighborDist=5,
                iterate=True, window=False, verbose=False):
     """
+    DEPRECATED by fix_bad_dq_knn: use that instead.
+
     Remove bad pixels by comparing their value to mean of neighbor pixels.
 
     Inputs:
@@ -511,20 +532,32 @@ def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True,
         dq_mask: array
             Boolean mask where True indicates a bad pixel.
         k: int
-            Number of nearest neighbor pixels to consider for fixing each bad pixel.
+            The number of nearest neighbors to return. If k is an integer it
+            is treated as a list of [1, … , k] (range(1, k+1)).
+            Note that the counting starts from 1.
         max_distance: float
-            Maximum distance to search for nearest neighbors.
+            Maximum distance to search for nearest neighbors. Return only
+            neighbors within this distance. This is used to prune tree
+            searches.
         iterate: bool, True to iterate until no bad pixels remain.
 
     Output:
-        numpy array with bad pixels replaced by the median of k nearest neighbors.
+        numpy array with bad pixels replaced by the median of k nearest
+        neighbors. If no valid neighbors exist, returns NaN.
     """
 
-    def median_of_knn(y, x, tree, data, k):
+    def median_of_knn(y, x, im, tree, data, k, max_distance=np.inf):
         # Query the k-nearest neighbors for the bad pixel (y, x)
         dist, idx = tree.query([y, x], k=k, distance_upper_bound=max_distance)
-        # Take only valid indices within the bounds
-        valid_idx = idx[dist != np.inf]
+        # Take only valid indices within the bounds and ignoring the bad pixel
+        # itself.
+        valid_idx = idx[(dist != np.inf) & (dist > 0)]
+        # nebStd = np.std(data[valid_idx])
+        # if np.abs(im[y,x] - nebStd) > 3*nebStd:
+        #     # Return the median value of the valid neighbors
+        #     return np.median(data[valid_idx])
+        # else:
+        #     return im[y,x]
         # Return the median value of the valid neighbors
         return np.median(data[valid_idx])
 
@@ -540,6 +573,7 @@ def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True,
 
     # Flatten the image for easier access to pixel values
     flat_im = im.ravel()
+    flat_dq = dq_mask.ravel()
     num_bad_pixels_0 = np.sum(dq_mask)
     num_bad_pixels_i = np.sum(dq_mask)
 
@@ -553,11 +587,14 @@ def fix_bad_dq_knn(im, dq_mask, k=5, max_distance=np.inf, iterate=True,
             # Convert 2D coordinates to 1D index
             idx = np.ravel_multi_index((y, x), im.shape)
             # Get the median from the k nearest neighbors
-            flat_im[idx] = median_of_knn(y, x, tree, valid_values, k)
+            flat_im[idx] = median_of_knn(y, x, im, tree, valid_values, k,
+                                         max_distance=max_distance)
+            flat_dq[idx] = False
 
         # Update the image and data quality mask
         im = flat_im.reshape(im.shape)
-        dq_mask = ~np.isfinite(im)
+        dq_mask = flat_dq.reshape(dq_mask.shape)
+        test = ~np.isfinite(im)
         num_bad_pixels_i = np.sum(dq_mask)
 
         if verbose: print(f"Iter {it}: {num_bad_pixels_0 - num_bad_pixels_i} bad pixels fixed")
