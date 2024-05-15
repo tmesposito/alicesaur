@@ -58,6 +58,10 @@ if __name__ == "__main__":
                         default="", type=str, nargs='?',
                         help=desc)
 
+    desc = 'HST proposal ID numbers for which to fetch data from MAST to run '\
+            + 'CTI correction. Separate multiple IDs with spaces.'
+    parser.add_argument('--pids', default=[], type=int, nargs='*', help=desc)
+
     desc = 'Width in [pixels] of diffraction spike masks. Default is to use the value in the info.json.'
     parser.add_argument('--spWidth', metavar='spWidth',
                         default=None, type=int, nargs='?',
