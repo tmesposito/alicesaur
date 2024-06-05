@@ -22,7 +22,7 @@ from alicesaur.plot.disk_plot import measure_radial_profile
 
 def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
                              rMax=180, interpInf=True, expandHW_r=False,
-                             expandHW=None, mode='mean'):
+                             expandHW=None, mode='mean', smooth=True):
     """
     paList: list, position angles east of +y axis in [degrees].
     paHW: half-width of PA wedge to include on either side of pa [deg].
@@ -92,17 +92,19 @@ def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
             radProf2d[(radii >= rad - 0.5) & (radii < rad + 0.5)] = medProf[ii]
 
     # Smooth the 2D radial profile map; then fix the NaNs near the center.
-    radProf2d_smooth = gaussian_filter(radProf2d, 2.)
-    radProf2d_smooth[np.isnan(radProf2d_smooth)] = radProf2d[np.isnan(radProf2d_smooth)]
-
-    # plt.figure(4)
-    # plt.clf()
-    # plt.imshow(radProf2d_smooth, vmin=-20., vmax=20.)
-    # plt.draw()
-    # 
-    # pdb.set_trace()
-
-    return radProf2d_smooth
+    if smooth:
+        radProf2d_smooth = gaussian_filter(radProf2d, 2.)
+        radProf2d_smooth[np.isnan(radProf2d_smooth)] = radProf2d[np.isnan(radProf2d_smooth)]
+        # plt.figure(4)
+        # plt.clf()
+        # plt.imshow(radProf2d_smooth, vmin=-20., vmax=20.)
+        # plt.draw()
+        # 
+        # pdb.set_trace()
+        print("Smoothed radial profile")
+        return radProf2d_smooth
+    else:
+        return radProf2d
 
 
 def dither_image(im, star, ditherPos):
@@ -395,9 +397,6 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                 rho = radii.copy()
                 rho[radii > 100] = np.nan
                 rho /= np.nanmax(rho)
-                c0 = np.array([1., -1., 2., -2.])
-                # c0 = np.zeros((k+1, k+1))
-                # p0 = np.append(np.array([0.]), c0.flatten())
                 pf = leastsq(residuals, p0, args=(img, refImgMasked, weightMap),
                              full_output=1, factor=1, epsfcn=0.01)
                 # pf = leastsq(residuals_poly, p0, args=(img, refImgMasked, yy, xx, k))
@@ -427,6 +426,8 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     plt.plot(rads, p1prof, 'c--')
                     plt.plot(rads, p1profOpp, 'm--')
                     plt.draw()
+
+                    c0 = np.array([1., -1., 2., -2.])
 
                     poly_out = leastsq(residuals_poly, c0.flatten(),
                                  args=(img - (10**pf[0][0])*refImgMasked, refImgMasked, yy, xx, rho, k),
@@ -480,29 +481,44 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                 meanRadProf = measure_mean_radial_prof(subImgMasked, sciStar,
                                                        paList=radProfPaList - orientats[ii],
                                                        paHW=radProfPaHW, rMax=radProfMax,
-                                                       interpInf=True,
+                                                       interpInf=False,
+                                                       smooth=True,
                                                        mode='median')
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 subImgs.append(subImg - meanRadProf)
             else:
                 subImgs.append(subImg)
                 meanRadProf = 0
+
+            # plt.figure(12)
+            # plt.clf()
+            # plt.imshow(subImg,
+            #            norm=SymLogNorm(vmin=-1., vmax=50, linthresh=0.01,
+            #                            linscale=1.))
+
             # plt.figure(13)
             # plt.clf()
-            # plt.imshow(subImg - meanRadProf, vmin=-1., vmax=10.)
+            # plt.imshow(subImg - meanRadProf,
+            #            norm=SymLogNorm(vmin=-1., vmax=50, linthresh=0.01,
+            #                            linscale=1.))
+
+            # plt.figure(14)
+            # plt.clf()
+            # plt.imshow(meanRadProf, vmin=-0.2, vmax=1.)
             # plt.draw()
-            # pdb.set_trace()
+
             # print(pf)
-                
-            # plt.figure(1)
-            # plt.clf()
-            # plt.imshow(polybf)
-            # plt.draw()
-            # plt.figure(2)
-            # plt.clf()
-            # plt.imshow(sciImgs[ii]- (10**pf[0][0])*refImgMasked - polybf, vmin=-1, vmax=1)
-            # plt.draw()
-            # breakpoint()
+
+            # # plt.figure(1)
+            # # plt.clf()
+            # # plt.imshow(polybf)
+            # # plt.draw()
+            # # plt.figure(2)
+            # # plt.clf()
+            # # plt.imshow(sciImgs[ii]- (10**pf[0][0])*refImgMasked - polybf, vmin=-1, vmax=1)
+            # # plt.draw()
+            # plt.show()
+            # pdb.set_trace()
 
 # *** MULTI-REFERENCE IMAGE CASE ***
     else:

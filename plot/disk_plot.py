@@ -15,6 +15,7 @@ from scipy.ndimage import gaussian_filter1d, gaussian_filter, median_filter, shi
 from scipy.signal import correlate
 from scipy.optimize import curve_fit
 from scipy.interpolate import interp1d
+from scipy.stats import median_abs_deviation
 from lmfit import Model
 import GPy
 
@@ -174,7 +175,8 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
                        maskEdges=False, labelPanels=False, zoomGpi=True,
                        smoothGpi=False, figAxes=None, sbcal=False,
                        vmax_stis=None, vmax_gpi=None,
-                       outputAxes=False, makeColorbar=False, save=False):
+                       outputAxes=False, makeColorbar=False,
+                       stis_cube_inds=None, save=False):
     """
     targName: str name of target to automatically get image paths from the
         dict in stis_disk_gallery_plot.
@@ -208,8 +210,13 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
         if stis_paths is None:
             stis_paths = [det_fns[targName]['wedge'],
                           det_fns[targName]['bar']]
+            stis_cube_inds = [det_fns[targName].get('wedgeInd', 0),
+                              det_fns[targName].get('barInd', 0)]
         if gpi_path is None:
             gpi_path = det_fns[targName]['rstokes']
+
+    if stis_cube_inds is None:
+        stis_cube_inds = len(stis_paths)*[0]
 
     stis_hdus = []
     stis = []
@@ -218,6 +225,10 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
             stis_hdus.append(fits.open(os.path.expanduser(pth)))
             if sbcal:
                 img = stis_hdus[ii][0].data.copy()
+                if img.ndim == 3:
+                    img = img[stis_cube_inds[ii]]
+                    print(f"Using index {stis_cube_inds[ii]} for image at "\
+                          f"{pth}")
                 hdr = stis_hdus[ii][0].header
                 # Assuming starting unit is COUNTS S^-1, can get away with
                 # forcing exptime = 1 because it is only used to convert to
@@ -228,7 +239,8 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
                 stis.append(imgCal[0])
             else:
                 stis.append(stis_hdus[ii][0].data)
-        except:
+        except Exception as ee:
+            print(ee)
             stis_hdus.append(None)
             stis.append(np.nan*np.ones((2048, 2048)))
 
@@ -2200,6 +2212,7 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
                 if rad >= expandHW_r:
                     paHW = expandHW
         radCond = (radii < rad + 0.5) & (radii > rad - 0.5)
+        # radCond = (radii < rad + 5.) & (radii > rad - 5.)
         # Handle PA wrapping cases around 0/2pi.
         phiMin = paPhi - paHW
         phiMax = paPhi + paHW
@@ -2218,6 +2231,8 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
         phiCond = phiCondMin + phiCondMax
 
         try:
+            # mad = median_abs_deviation(data[radCond & phiCond])
+            # print(f"MAD is {mad:.4f}")
             if mode == 'peak':
                 prof.append(np.nanmax(data[radCond & phiCond]))
             elif mode == 'mean':
@@ -2226,6 +2241,7 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
                 prof.append(np.nanmedian(data[radCond & phiCond]))
         except:
             prof.append(np.nan)
+
         try:
             if np.isnan(prof[-1]):
                 paPeak.append(np.nan)
@@ -2233,6 +2249,7 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
                 paPeak.append(phi[(data == prof[-1]) & radCond & phiCond][0])
         except:
             paPeak.append(np.nan)
+
         try:
             phiCondOpp = (phi < paPhiOpp + paHW) & (phi > paPhiOpp - paHW)
             try:
@@ -2263,9 +2280,9 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
     except:
         paOppPeakNorm = -1*np.ones(paOppPeak.shape)
     
-    rads_wmean, jnk = weighted_mean_1d(rads, np.ones(paPeakNorm.shape), n=10)
-    paPeakNorm_wmean, jnk = weighted_mean_1d(paPeakNorm, np.ones(paPeakNorm.shape), n=10)
-    paOppPeakNorm_wmean, jnk = weighted_mean_1d(paOppPeakNorm, np.ones(paOppPeakNorm.shape), n=10)
+    # rads_wmean, jnk = weighted_mean_1d(rads, np.ones(paPeakNorm.shape), n=10)
+    # paPeakNorm_wmean, jnk = weighted_mean_1d(paPeakNorm, np.ones(paPeakNorm.shape), n=10)
+    # paOppPeakNorm_wmean, jnk = weighted_mean_1d(paOppPeakNorm, np.ones(paOppPeakNorm.shape), n=10)
     
     if plot:
         plt.figure(2, figsize=(8,5))
@@ -2274,12 +2291,13 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
         plt.subplots_adjust(left=0.13, bottom=0.14, right=0.98, top=0.93)
         ax.errorbar(rads, prof, marker='.', linestyle='None', label='E')
         ax.errorbar(rads, profOpp, marker='.', linestyle='None', label='W')
-        ax.set_yscale('log')
+        # ax.set_yscale('log')
         plt.legend(numpoints=1)
-        ax.set_ylabel('Peak intensity')
+        ax.set_ylabel('Profile intensity')
         ax.set_xlabel('Radius (pixels)')
         # plt.title(hdr.get('TARGNAME'), fontsize=14)
         plt.draw()
+        plt.show()
         
         # plt.figure(3, figsize=(8,5))
         # plt.clf()
@@ -2294,7 +2312,7 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
         # ax.set_xlabel('Radius (pixels)')
         # # plt.title(hdr.get('TARGNAME'), fontsize=14)
         # plt.draw()
-    
+
     return rads, prof, profOpp, paPeak, paOppPeak
 
 

@@ -38,6 +38,8 @@ from alicesaur.gaia.gaia_utils import get_gaia_id
 # Set matplotlib backend based on OS.
 if platform.system() == 'Darwin':
     matplotlib.use('MACOSX')
+# Set matplotlib imshow origin to bottom left.
+matplotlib.rcParams["image.origin"] = "lower"
 
 
 # FIX ME!!! Temp legacy information identifying STIS survey datasets that
@@ -1156,6 +1158,9 @@ class Pipeline(object):
         if imType == 'final':
             filetype = 'Final combined PSF-subtracted image'
             cmt1 = f'{self.psfSubMode} PSF-subtracted combined image'
+            if np.array(data).ndim == 3:
+                cmt1 += 's. Index 0 = all subtractions; Index 1 = no '\
+                    'post-combine radial profile subtraction.'
         elif imType == 'psfcube':
             filetype = 'Individual PSF-subtracted image cube'
             cmt1 = f'{self.psfSubMode} PSF-subtracted individual images'
@@ -1781,6 +1786,7 @@ class Pipeline(object):
             # psfSubMasks[ind][radii >= sub_r_out] = np.nan
             # psfSubMasks[ind][radii < sub_r_in] = np.nan
             # psfSubMasks[ind] += sourceMasks[ind]
+            # breakpoint()
 
     # # TEMP!!! TEST ONLY PSF SUBTRACTING BASED ON DIFFRACTION SPIKES.
             if psfsubOnSpikesOnly:
@@ -1887,28 +1893,30 @@ class Pipeline(object):
                                             cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
                                             paOffset=0, spikeAngles=self.spikeAngles)
 
-            if self.debug:
-                for ii in range(len(psfSubMasks)):
-                    plt.figure(5)
-                    plt.clf()
-                    plt.imshow(psfSubMasks[ii])
-                    plt.title(f"PSF Subtraction mask: img {ii}")
+        if self.debug:
+            for ii in range(len(psfSubMasks)):
+                plt.figure(5)
+                plt.clf()
+                plt.imshow(psfSubMasks[ii])
+                plt.title(f"PSF Subtraction mask: img {ii}")
 
-                    plt.figure(6)
-                    plt.clf()
-                    plt.imshow(self.workingImgs[ii],
-                                norm=SymLogNorm(linthresh=0.01, linscale=1,
-                                                vmin=0, vmax=100))
-                    plt.title(f"Aligned image: img {ii}")
+                plt.figure(6)
+                plt.clf()
+                plt.imshow(self.workingImgs[ii],
+                            norm=SymLogNorm(linthresh=0.01, linscale=1,
+                                            vmin=0, vmax=100))
+                plt.title(f"Aligned image: img {ii}")
 
-                    plt.figure(7)
-                    plt.clf()
-                    plt.imshow(self.workingImgs[ii]*~sourceMasks[ii],
-                                norm=SymLogNorm(linthresh=0.01, linscale=1,
-                                                vmin=0, vmax=100))
-                    plt.title(f"Aligned image with PSF Subtraction mask: img {ii}")
+                plt.figure(7)
+                plt.clf()
+                plt.imshow(self.workingImgs[ii]*~sourceMasks[ii],
+                            norm=SymLogNorm(linthresh=0.01, linscale=1,
+                                            vmin=0, vmax=100))
+                plt.title(f"Aligned image with PSF Subtraction mask: img {ii}")
+                plt.draw()
+                plt.show()
 
-                    pdb.set_trace()
+                pdb.set_trace()
 
 
     # ======== PSF SUBTRACTION ======== #
@@ -1934,17 +1942,19 @@ class Pipeline(object):
                 self.subRadProf = False
 
             # Estimate initial brightness scaling for reference PSFs.
-            sciImg_999 = np.percentile(self.workingImgs[self.sciInds][~psfSubMasks[self.sciInds]], 99.9)
-            refImg_999 = np.percentile(self.workingImgs[self.refInds][~psfSubMasks[self.refInds]], 99.9)
-            ratio_ref_sci = refImg_999/sciImg_999
+            # S_sciImg = np.percentile(self.workingImgs[self.sciInds][~psfSubMasks[self.sciInds]], 99.9)
+            # S_refImg = np.percentile(self.workingImgs[self.refInds][~psfSubMasks[self.refInds]], 99.9)
+            S_sciImg = np.nansum(self.workingImgs[self.sciInds][~psfSubMasks[self.sciInds]])
+            S_refImg = np.nansum(self.workingImgs[self.refInds][~psfSubMasks[self.refInds]])
+            ratio_ref_sci = S_refImg/S_sciImg
             print("\nRatio of reference PSF to science PSF brightness = "\
                   f"{ratio_ref_sci:.3f}")
             # Don't let ratio stray too far from unity.
             if (ratio_ref_sci < 0.05) or (ratio_ref_sci > 20):
                 ratio_ref_sci = 1.
-            print(f"Using {ratio_ref_sci:.3f} as initial reference PSF "\
+            print(f"Using {1/ratio_ref_sci:.3f} (1/{ratio_ref_sci:.3f}) as initial reference PSF "\
                   "scaling ratio\n")
-            C0 = np.log10(ratio_ref_sci)
+            C0 = np.log10(1/ratio_ref_sci)
 
             # Do the PSF subtraction.
             psfSubImgs, refScaleFactors = stis_psfsub.rdi_subtract_psf(
@@ -2138,7 +2148,9 @@ class Pipeline(object):
                                                        paList=info[obsMode]['radProfSub']['paList'],
                                                        paHW=info[obsMode]['radProfSub']['paHW'],
                                                        rMax=info[obsMode]['radProfSub']['rMax'])
+                del tmpImg
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
+                finalImg_noFinalProfSub = finalImg.copy()
                 finalImg -= meanRadProf
 
                 if self.debug:
@@ -2162,14 +2174,21 @@ class Pipeline(object):
                     plt.title("Post-combine radial profile measured")
 
                     pdb.set_trace()
-            
+            else:
+                finalImg_noFinalProfSub = None
+
             # Do one final background subtraction.
             if info[obsMode].get('bgCenFinal_yx') is not None:
                 finalImg, bgFinal = utils.subtract_bg(finalImg, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
 
             # Write the final combined PSF-subtracted image to FITS file.
             if self.saveFinal:
-                self.save_psfsub_to_fits(finalImg, 'final', unit=newUnit)
+                if finalImg_noFinalProfSub is None:
+                    self.save_psfsub_to_fits(finalImg,
+                                             'final', unit=newUnit)
+                else:
+                    self.save_psfsub_to_fits(np.array([finalImg, finalImg_noFinalProfSub]),
+                                             'final', unit=newUnit)
 
             # Compute error maps.
             if not self.noErrorMaps:
