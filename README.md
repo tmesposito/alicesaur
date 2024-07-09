@@ -26,9 +26,13 @@ Python 3.9 or higher is recommended. You can install it with a package manager o
 
 ### Install alicesaur source code
 To install the core alicesaur functionality, clone this repository. We recommend setting up an ssh key to access your github account via ssh authentication, in which case you would clone the repository with:
-```git clone git@github.com:tmesposito/alicesaur.git```
+```
+git clone git@github.com:tmesposito/alicesaur.git
+```
 Otherwise, you can clone the repository via HTTPS authenticaion with:
-```git clone https://github.com/tmesposito/alicesaur.git```
+```
+git clone https://github.com/tmesposito/alicesaur.git
+```
 
 ### Install libcfitsio library
 Some of the STScI tools used by alicesaur depend on the CFITSIO library named libcfitsio. The easiest way to install this is via Homebrew, which we recommend. Otherwise, it can be installed from source. Instructions for both methods can be found at https://heasarc.gsfc.nasa.gov/fitsio/fitsio_macosx.html.
@@ -37,26 +41,39 @@ Some of the STScI tools used by alicesaur depend on the CFITSIO library named li
 
 ### Install Python dependencies
 alicesaur is dependent on several publicly available Python packages. To install the bulk of these, first `cd` into your cloned local repository of alicesaur. Then, do a pip install of the repository's `requirements.txt` file:
-```pip install -r requirements.txt```
+```
+pip install -r requirements.txt
+```
 
 A few dependencies cannot be pip installed. For these, do the following:
-1. Clone the github repository for STScI's `crds` package to use their Calibration Reference Data System: ```git clone git@github.com:spacetelescope/crds.git```
-2. Go to the github repository for STScI's STIS data reduction notebook at https://github.com/spacetelescope/STIS-Notebooks/tree/main/drizpac_notebook and download the single file `copy_files.py` to the same parent directory that houses your local alicesaur repository.
+1. Clone the github repository for STScI's `crds` package to use their Calibration Reference Data System:
+   ```
+   git clone git@github.com:spacetelescope/crds.git
+   ```
+3. Go to the github repository for STScI's STIS data reduction notebook at https://github.com/spacetelescope/STIS-Notebooks/tree/main/drizpac_notebook and download the single file [copy_files.py](https://github.com/spacetelescope/STIS-Notebooks/blob/main/drizpac_notebook/copy_files.py) to the same parent directory that houses your local alicesaur repository.
 
 ### Install CALSTIS executables
 Optional calibration steps within alicesaur for charge transfer inefficiency (CTI) correction and geometric distortion (x2d) correction rely on C executables from older CALSTIS code. At the moment, the easiest way to install them is to ask the alicesaur developers for copies.
 
-Once you have them, place all the cs#.e files into your environment's PATH. The suggested location is inside your environment's `bin/` directory, but any path that you then add to the environment's PATH variable should work.
+Once you have them, place all the cs#.e files into your environment's PATH (there should be eight files). The suggested location is inside your environment's `bin/` directory, but any path that you then add to the environment's PATH variable should work.
 
 Next, on some operating systems such as MacOS, you will need to adjust your security preferences to "trust" two of these executables, as they are not recognized as safe by default. One of the following approaches should work on Mac to solve the issue. You may or may not need to find similar workarounds for other OS's.
-1. Via command line, run `xattr -dr com.apple.quarantine "/your/path/here/bin/cs0.e"`. Repeat this for each `cs#.e` file.
+1. Via command line, run
+   ```
+   xattr -dr com.apple.quarantine "/your/path/here/bin/cs0.e"
+   ```
+   Repeat this for each `cs#.e` file.
 2. Try to run the executable, either by calling it individually from the command line or by running the alicesaur pipeline. When an error message appears saying the executable can't be run because it is not trusted, open System Preferences, go to Privacy & Security, select "Allow applications downloaded from App Store and identified developers", then below that where there is a message that says "cs#.e was blocked from used because it is not from an identified developer" click the "Allow anyway" button. You will need to repeat this for each cs#.e file, which may require running the pipeline multiple times (if you chose that method). Fortunately, you only need to do this entire process once.
 
 ### Add alicesaur to your PYTHONPATH
 To run, the parent directory containing your local alicesaur repository must be in your environment's PYTHONPATH. To add it temporarily for your currently active shell, you can run either:
-```export PYTHONPATH=/path/to/parent/directory:$PYTHONPATH```  for a bash shell
-OR
-```setenv PYTHONPATH /path/to/parent/directory:$PYTHONPATH```  for a csh shell like csh, tcsh, or zsh
+```
+export PYTHONPATH=/path/to/parent/directory:$PYTHONPATH   # for a bash shell
+```
+or
+```
+setenv PYTHONPATH /path/to/parent/directory:$PYTHONPATH   # for a csh shell like csh, tcsh, or zsh
+```
 If you want this change to be permanent, you can add the above line to your general shell "rc" file, typically named something like ~/.bashrc or ~/.cshrc, or to your environment's startup script.
 
 ## Quick Start
@@ -94,12 +111,9 @@ This will download raw STIS data for target HD 129590 with the program ID 15653 
 
 Next, it will output an intermediate product named `unified_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits` containing the unified (summed over CRSPLITs) images aligned to a common star center. Following that will be a cube of the individual PSF-subtracted images named `psfcube_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits`. Finally, the final image products will be output.
 
-**_NOTE:_** The Pipeline class currently looks for an `info.json` file just above the directory
-containing the input FITS files. That file contains
-the basic reduction parameters, like filtering choices and PSF-subtraction optimization
-region definitions. This file is optional and the pipeline will run without one, but it will use default values for those
-reduction parameters which may not be optimal for every data set. In the meantime, here is a basic
-template if you want to try a reduction, with parameters for one Bar10 dataset and one WedgeB1.0 dataset for the same target (HD 115600).
+**_NOTE:_** The Pipeline class looks for an `info.json` file in the top data directory; e.g., `~/path/to/data/directory/hd129590_20200413_stis/` in the example above. That file contains the basic reduction parameters for that data set, like masking, filtering choices, and PSF-subtraction optimization
+region definitions. This file is optional and the pipeline will run without one, but doing so will use default values for those
+reduction parameters which may not be optimal for every data set. In the meantime, here is a basic template if you want to try a reduction, with parameters for one Bar10 dataset and one WedgeB1.0 dataset for the same target (HD 115600).
 
 ```
 {
