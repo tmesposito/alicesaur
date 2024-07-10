@@ -295,6 +295,28 @@ def make_spikemask_stis(img, ctr, angles, width=10.):
     return mask
 
 
+def median_patch(im, cen, size):
+    """
+    Generic median measurement of pixels within a given patch.
+
+    cen: int array of y,x coords for center of background patch measurement.
+    size: single int for a circular radius, or two ints for the full height and
+        and width of a rectangle.
+    """
+
+    # Circular patch.
+    if type(size) in [int, float]:
+        radii = make_radii(im, cen)
+        patch = im[radii <= size]
+    # Rectangular patch.
+    else:
+        patch = im[cen[0]-size[0]//2:cen[0]+size[0]//2+1, cen[1]-size[1]//2:cen[1]+size[1]//2+1]
+
+    med = np.nanmedian(patch)
+
+    return med
+
+
 def subtract_bg(im, cen, size):
     """
     Generic background/sky subtraction using a manually selected patch.
@@ -303,23 +325,15 @@ def subtract_bg(im, cen, size):
     size: single int for a circular radius, or two ints for the full height and
         and width of a rectangle.
     """
-    
-    # Circular patch.
-    if type(size) in [int, float]:
-        radii = make_radii(im, cen)
-        patch = im[radii <= size]
-    # Rectangular patch.
-    else:
-        patch = im[cen[0]-size[0]//2:cen[0]+size[0]//2+1, cen[1]-size[1]//2:cen[1]+size[1]//2+1]
-    
-    bg = np.nanmedian(patch)
-    
+
+    bg = median_patch(im=im, cen=cen, size=size)
+
     try:
         assert not np.isnan(bg)
     except:
         print("\nWARNING! Background estimate is NaN, so no background subtraction will be performed.")
         return im, bg
-    
+
     imSub = im - bg
 
     # test = im.copy()
@@ -330,6 +344,65 @@ def subtract_bg(im, cen, size):
     # plt.draw()
     # pdb.set_trace()
     return imSub, bg
+
+
+def randomly_sample_bg(im, excludeYX=[], bgRadius=30, exclusionRadius=200,
+                       mask=None):
+    """
+
+    Parameters
+    ----------
+    im : TYPE
+        DESCRIPTION.
+    exclude_yx : TYPE, optional
+        DESCRIPTION. The default is [].
+    bgRadius : int, optional
+        DESCRIPTION. The default is 30.
+    exclusionRadius : TYPE, optional
+        DESCRIPTION. The default is 200.
+    mask : bool ndarray, optional
+        Boolean array that is True whereever the image should be masked and
+        False everywhere else. The default of None will apply no masking.
+
+    Returns
+    -------
+    None.
+
+    """
+
+    # Space out a bunch of sample locations, then exclude any that are masked
+    # or too close to the exclusion points.
+    imMasked = im.copy()
+    imMasked[mask] = np.nan
+    # Add masking of the exclusion region.
+    for exYX in excludeYX:
+        radii = make_radii(im, exYX)
+        imMasked[radii <= exclusionRadius] = np.nan
+    whGood = np.where(~np.isnan(imMasked))
+    yRange = (int(min(whGood[0]) + bgRadius), int(max(whGood[0]) - bgRadius))
+    xRange = (int(min(whGood[1]) + bgRadius), int(max(whGood[1]) - bgRadius))
+    sampleYs = np.arange(yRange[0], yRange[1], int(2*bgRadius))
+    sampleYXs = zip(sampleYs, np.linspace(xRange[0], xRange[1], len(sampleYs),
+                                          dtype=int))
+    goodYXs = []
+    for yx in sampleYXs:
+        if np.isnan(imMasked[yx]):
+            continue
+        radii = make_radii(im, yx)
+        if np.sum(np.isnan(imMasked[radii <= bgRadius])) > 0.5*(np.pi*bgRadius**2):
+            continue
+        else:
+            goodYXs.append(yx)
+
+    # Measure the median inside each sample region and return the median
+    # of those medians as the background estimate.
+    bgs = []
+    for yx in goodYXs:
+        bgs.append(median_patch(im=imMasked, cen=yx, size=bgRadius))
+
+    bg_med = np.nanmedian(bgs)
+
+    return bg_med
 
 
 def unsharp(ds, dataHDU, fl, B=30., ident='_999', output=True, silent=True,
