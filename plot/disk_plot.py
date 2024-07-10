@@ -2402,6 +2402,38 @@ def plot_radprofs(tablePaths, yRange=None):
     return
 
 
+def plot_radprof_1d(rads, prof, yRange=None, savePath=None):
+
+    fs = 14 # fontsize
+
+    fig = plt.figure(13, figsize=(7,5))
+    plt.clf()
+    ax = plt.subplot(111)
+    plt.subplots_adjust(left=0.11, bottom=0.12, right=0.98, top=0.9)
+    ax.plot(rads, prof, marker='.', linestyle='-',
+            label='Radial Profile')
+    if yRange is not None:
+        ax.set_ylim(yRange[0], yRange[1])
+    ax.set_yscale('linear')
+    ax.set_xscale('log')
+    # # Add top X axis in arcsec.
+    # axy = ax.twiny()
+    # axy.set_xticks(np.arange(0., 4., 0.5)/pscale_stis)
+    # axy.set_xticklabels(np.arange(0., 4., 0.5), fontsize=fs)
+    # axy.set_xscale('log')
+    # axy.set_xlabel('Radius (arcsec)', fontsize=fs)
+    ax.legend(numpoints=1, fontsize=fs-2, handletextpad=0.2)
+    ax.set_ylabel('Intensity', fontsize=fs)
+    ax.set_xlabel('Radius (pixels)', fontsize=fs)
+    ax.tick_params(axis='both', which='both', direction='in', labelsize=fs)
+    plt.draw()
+
+    if savePath is not None:
+        fig.savefig(savePath, format='png', dpi=200)
+
+    return
+
+
 def plot_highpass_filter(filepath, highpassSize=30., gaussian=False, save=False):
     
     hdu = fits.open(filepath)
