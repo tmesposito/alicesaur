@@ -3,6 +3,7 @@
 import pdb
 import numpy as np
 import json
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import SymLogNorm
 from matplotlib import patches
@@ -10,6 +11,9 @@ from astropy.io import fits
 
 # Internal imports
 from alicesaur import utils
+
+# Set matplotlib imshow origin to bottom left.
+matplotlib.rcParams["image.origin"] = "lower"
 
 
 def mask_exclusions(im=None, mask=None, exclusions={}, cen=None,
@@ -33,13 +37,15 @@ def mask_exclusions(im=None, mask=None, exclusions={}, cen=None,
         newMask = mask_rect(newMask.copy(), excl, cen, cenOffset, paOffset)
     for excl in exclusions.setdefault('point_yxr', []):
         newMask = mask_point(newMask.copy(), excl, cen, cenOffset, paOffset)
+    for excl in exclusions.setdefault('spikes_yxr_anglesDeg', []):
+        if excl != []:
+            newMask = mask_spikes_offaxis(newMask.copy(), excl, cen, cenOffset,
+                                          paOffset, spikeAngles=excl[3])
     # plt.figure(4)
     # plt.imshow(alignImgs[ind]*newMask, vmin=0, vmax=1)
     # plt.draw()
     # pdb.set_trace()
-    # for excl in exclusions.setdefault('spikes_yxr', []):
-    #     newMask = mask_spikes_offaxis(newMask.copy(), excl, cen, cenOffset, paOffset,
-    #                                     spikeAngles)
+
 
     return newMask
 
@@ -212,7 +218,8 @@ def mask_charge_bleed(mask, data, cen, paOffset=0.):
     return
 
 
-def show_masks(im, info, infoMode='bar10', imCat='sci', cen=None):
+def show_masks(im, info, infoMode='bar10', imCat='sci', cen=None,
+               spikeAngles=(44.9, 134.7), orientats=[0]):
     """
     Plot an image and overplot the masks specified for it in its associated
     info.json file. The central radius mask is cyan, rectangle is gray, and
@@ -241,6 +248,8 @@ def show_masks(im, info, infoMode='bar10', imCat='sci', cen=None):
 
     if type(im) is str:
         data = fits.getdata(im)
+        if data.ndim > 2:
+            data = data[0]
         hdr = fits.getheader(im)
     else:
         data = im
@@ -265,7 +274,8 @@ def show_masks(im, info, infoMode='bar10', imCat='sci', cen=None):
     pointMasks = info[infoMode]['exclude'][imCat].get('point_yxr', [])
     rectMasks = info[infoMode]['exclude'][imCat].get('rect_cenYX_widthYX_angleDeg', [])
     rinMask = info[infoMode]['exclude'][imCat].get('r_in', 0.)
-    routMask = info[infoMode]['exclude'][imCat].get('r_out', 0.)\
+    routMask = info[infoMode]['exclude'][imCat].get('r_out', 0.)
+    offAxisSpikeMasks = info[infoMode]['exclude'][imCat].get('spikes_yxr_anglesDeg', [])
 
     if (rinMask > 0.) or (routMask > 0.):
         circIn = patches.Circle(cen[::-1], radius=rinMask, edgecolor='c', facecolor='None')
@@ -278,13 +288,42 @@ def show_masks(im, info, infoMode='bar10', imCat='sci', cen=None):
         ax.add_patch(circ)
 
     for rt in rectMasks:
-        # The xy anchor point around which the rectangle rotates is the
-        # lower left corner of the rectangle.
-        rect = patches.Rectangle((rt[0][1]-rt[1][1]//2, rt[0][0]+rt[1][0]//2),
-                                  width=rt[1][1], height=rt[1][0], angle=rt[2],
+        # The xy anchor point around which the rectangle rotates by default is
+        # the lower left corner of the rectangle.
+        width = rt[1][1]
+        # Given center of the rectangle.
+        center_xy = np.array([rt[0][1], rt[0][0]])
+        # Lower left corner of the rectangle (before any rotation).
+        start_xy = np.array([center_xy[0] - width/2, center_xy[1] - rt[1][0]/2])
+        # Calculate a transformation to rotate around the given center instead.
+        tr = matplotlib.transforms.Affine2D().rotate_deg_around(x=center_xy[0], y=center_xy[1],
+                                                                degrees=rt[2])
+        t = tr + ax.transData
+        rect = patches.Rectangle((start_xy[0], start_xy[1]),
+                                  width=width, height=rt[1][0], angle=0,
                                   #rotation_point='center',
-                                  edgecolor='0.5', facecolor='None')
+                                  edgecolor='C1', facecolor='None',
+                                  transform=t)
         ax.add_patch(rect)
+
+    for sp in offAxisSpikeMasks:
+        for spAngle in sp[3]:
+            for pa in orientats:
+                width = 1000
+                # Given center of the rectangle.
+                center_xy = np.array([sp[1], sp[0]])
+                # Lower left corner of the rectangle (before any rotation).
+                start_xy = np.array([center_xy[0] - width/2, center_xy[1] - sp[2]/2])
+                # Calculate a transformation to rotate around the given center instead.
+                tr = matplotlib.transforms.Affine2D().rotate_deg_around(x=center_xy[0], y=center_xy[1],
+                                                                        degrees=spAngle + pa)
+                t = tr + ax.transData
+                rect = patches.Rectangle((start_xy[0], start_xy[1]),
+                                          width=width, height=sp[2], angle=0,
+                                          #rotation_point='center',
+                                          edgecolor='m', facecolor='None',
+                                          transform=t)
+                ax.add_patch(rect)
 
     plt.show()
 
