@@ -25,19 +25,19 @@ Be sure to activate this new environment and work within it for all following in
 Python 3.9 or higher is recommended. You can install it with a package manager or from source. Using your operating system's existing Python installation is discouraged because changes or damage to it can create serious problems at the system level.
 
 ### Install alicesaur source code
-To install the core alicesaur functionality, clone this repository. We recommend setting up an ssh key to access your github account via ssh authentication, in which case you would clone the repository with:
+To install the core alicesaur functionality, clone this repository. We recommend setting up an [ssh key to access your github account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent) via ssh authentication, in which case you would clone the repository with:
 ```
 git clone git@github.com:tmesposito/alicesaur.git
 ```
-Otherwise, you can clone the repository via HTTPS authenticaion with:
+Otherwise, you can clone the repository via HTTPS authentication with:
 ```
 git clone https://github.com/tmesposito/alicesaur.git
 ```
 
 ### Install libcfitsio library
-Some of the STScI tools used by alicesaur depend on the CFITSIO library named libcfitsio. The easiest way to install this is via Homebrew, which we recommend. Otherwise, it can be installed from source. Instructions for both methods can be found at https://heasarc.gsfc.nasa.gov/fitsio/fitsio_macosx.html.
+Some of the STScI tools used by alicesaur depend on the CFITSIO library named libcfitsio. The easiest way to install this is via a package manager like apt (linux) or Homebrew (Mac), which we recommend. Otherwise, it can be installed from source. Instructions for both methods can be found at https://heasarc.gsfc.nasa.gov/fitsio.
 
-*After you install libcfitsio*, you will also need to manually copy the "libcfitsio.10.x.y.z.dylib" file (where x,y,z will be some subversion numbers) from the installed cfitsio directory into the directory where the STScI code will look for it. That's typically inside your environment's `lib/` directory. After doing so, you must either A) rename the copied file to the specific filename the code expects, which for versions named libcfitsio.10.x.y.z will be `libcfitsio.10.dylib`, or B) make a symbolic link with that name linked to the copied libcfitsio.10.x.y.z.dylib file.
+*After you install libcfitsio*, you will likely also need to manually copy the "libcfitsio.10.x.y.z.dylib" file (where x,y,z will be some subversion numbers) from the installed cfitsio directory into the directory where the STScI code will look for it. That's typically inside your environment's `lib/` directory. After doing so, you must either A) rename the copied file to the specific filename the code expects, which for versions named libcfitsio.10.x.y.z will be `libcfitsio.10.dylib`, or B) make a symbolic link with that name linked to the copied libcfitsio.10.x.y.z.dylib file.
 
 ### Install Python dependencies
 alicesaur is dependent on several publicly available Python packages. To install the bulk of these, first `cd` into your cloned local repository of alicesaur. Then, do a pip install of the repository's `requirements.txt` file:
@@ -55,9 +55,9 @@ A few dependencies cannot be pip installed. For these, do the following:
 ### Install CALSTIS executables
 Optional calibration steps within alicesaur for charge transfer inefficiency (CTI) correction and geometric distortion (x2d) correction rely on C executables from older CALSTIS code. At the moment, the easiest way to install them is to ask the alicesaur developers for copies.
 
-Once you have them, place all the cs#.e files into your environment's PATH (there should be eight files). The suggested location is inside your environment's `bin/` directory, but any path that you then add to the environment's PATH variable should work.
+1. Once you have them, place all the cs#.e files into your environment's PATH (there should be eight files). The suggested location is inside your environment's `bin/` directory, but any path that you then add to the environment's PATH variable should work.
 
-Next, on some operating systems such as MacOS, you will need to adjust your security preferences to "trust" two of these executables, as they are not recognized as safe by default. One of the following approaches should work on Mac to solve the issue. You may or may not need to find similar workarounds for other OS's.
+2. Next, on some operating systems such as MacOS, you will need to adjust your security preferences to "trust" two of these executables, as they are not recognized as safe by default. One of the following approaches should work on Mac to solve the issue. You may or may not need to find similar workarounds for other OS's.
 1. Via command line, run
    ```
    xattr -dr com.apple.quarantine "/your/path/here/bin/cs0.e"
@@ -67,12 +67,13 @@ Next, on some operating systems such as MacOS, you will need to adjust your secu
 
 ### Add alicesaur to your PYTHONPATH
 To run, the parent directory containing your local alicesaur repository must be in your environment's PYTHONPATH. To add it temporarily for your currently active shell, you can run either:
+(for a bash shell)
 ```
-export PYTHONPATH=/path/to/parent/directory:$PYTHONPATH   # for a bash shell
+export PYTHONPATH=/path/to/parent/directory:$PYTHONPATH
 ```
-or
+or (for a csh shell like csh, tcsh, or zsh)
 ```
-setenv PYTHONPATH /path/to/parent/directory:$PYTHONPATH   # for a csh shell like csh, tcsh, or zsh
+setenv PYTHONPATH /path/to/parent/directory:$PYTHONPATH
 ```
 If you want this change to be permanent, you can add the above line to your general shell "rc" file, typically named something like ~/.bashrc or ~/.cshrc, or to your environment's startup script.
 
@@ -80,21 +81,15 @@ If you want this change to be permanent, you can add the above line to your gene
 
 ### Example STIS reduction
 You can run a basic STIS reduction from raw MAST archive files to RDI PSF-subtracted final images using the script
-`scripts/main_reduce_stis.py`. The default outputs to the input image directory will be:
-1. The final, time-collapsed, PSF-subtracted image named `final_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits`.
-  * Default intensity units are DN/s.
-  * Default final star location is pixel (1024, 1024) in Python coordinates; i.e., (1025, 1025) in DS9.
-2. An error map with the 1-sigma noise per pixel in units of DN/s named `error_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits`.
-3. A signal-to-noise ratio map named `snr_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits`.
+`scripts/main_reduce_stis.py`.
 
 The way to run it is as follows:
 
-First, create a directory to contain the data. We recommend making an outer directory for the target, observation date, and instrument (e.g., "hd115600_20200210_stis"), then a subdirectory within that for the observing mode or occulter position (e.g., "bar10").
+First, create a directory to contain the data. We recommend making an outer directory for the target, observation date, and instrument (e.g., "hd129590_20200413_stis"), then a subdirectory within that for the observing mode or occulter position (e.g., "bar10").
 
 Then, call the main reduction script like:
 ```
-python alicesaur/scripts/main_reduce_stis.py --dataDir ~/path/to/data/directory/hd129590_20200413_stis/bar10
---instrument stis --obsMode bar10 --psfSubMode rdi --targ HD-129590 --noCombine --inputType flt --pids 15653 --saveFinal [--noFixPix --noErrorMaps]
+python alicesaur/scripts/main_reduce_stis.py --dataDir ~/path/to/data/directory/hd129590_20200413_stis/bar10 --instrument stis --obsMode bar10 --psfSubMode rdi --targ HD-129590 --noCombine --inputType flt --pids 15653 --saveFinal [--noFixPix --noErrorMaps]
 ```
 where
 * `dataDir` is the path to the directory containing your input sx2 FITS files ("raw" data),
@@ -110,6 +105,13 @@ where
 This will download raw STIS data for target HD 129590 with the program ID 15653 and the "BAR10" occulter position. It will then perform CTI correction, which takes up to ~10 minutes (depending on length of data set) and output new "flc.fits" files to the data directory. Then it will perform the rest of the calibration steps, outputting "xfc.fits" and "axc.fits" image files with individual CRSPLIT slices.
 
 Next, it will output an intermediate product named `unified_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits` containing the unified (summed over CRSPLITs) images aligned to a common star center. Following that will be a cube of the individual PSF-subtracted images named `psfcube_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits`. Finally, the final image products will be output.
+
+The default outputs to the input image directory will be:
+1. The final, time-collapsed, PSF-subtracted image named `final_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits`.
+  * Default intensity units are DN/s.
+  * Default final star location is pixel (1024, 1024) in Python coordinates; i.e., (1025, 1025) in DS9.
+2. An error map with the 1-sigma noise per pixel in units of DN/s named `error_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits`.
+3. A signal-to-noise ratio map named `snr_[targetName]_[obsDate]_stis_axc_[obsMode]_rdi_a1.fits`.
 
 **_NOTE:_** The Pipeline class looks for an `info.json` file in the top data directory; e.g., `~/path/to/data/directory/hd129590_20200413_stis/` in the example above. That file contains the basic reduction parameters for that data set, like masking, filtering choices, and PSF-subtraction optimization
 region definitions. This file is optional and the pipeline will run without one, but doing so will use default values for those
