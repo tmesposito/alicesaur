@@ -76,6 +76,11 @@ if __name__ == "__main__":
     parser.add_argument('--saveFinal', dest="saveFinal",
                         action="store_true", help=desc)
 
+    desc = 'Custom identifier for the reduction, which will be appended to '
+    desc += 'the ends of all saved files. Default is an empty string.'
+    parser.add_argument('--cid', default='', type=str,
+                        nargs='?', help=desc)
+
     desc = 'Use --noFixCTI to NOT correct for Charge-Transfer Inefficiency in'\
         ' each individual .flt image. Only applies if --input-type flt and '\
         ' --pids [proposal ID] are supplied.'
