@@ -1331,6 +1331,16 @@ class Pipeline(object):
         newPriHdr['ANNULI'] = (self.ann, 'Number of subtraction region annuli')
         newPriHdr['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
         newPriHdr['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
+        try:
+            newPriHdr.add_comment('Science images used: '\
+                                  f'{[os.path.basename(fp) for fp in self.fileList[self.sciInds]]}')
+        except:
+            pass
+        try:
+            newPriHdr.add_comment('Reference images used: '\
+                                  f'{[os.path.basename(fp) for fp in self.fileList[self.refInds]]}')
+        except:
+            pass
         newPriHdr.add_comment('Constituent image ORIENTAT angles: '\
                                + str(self.orientats[self.sciInds]).replace('\n', ''))
         if self.subFinalRadProf and imType in ['final']:
@@ -1756,7 +1766,6 @@ class Pipeline(object):
 
 
     # ==== BACKGROUND SUBTRACTION ==== #
-
         # Subtract background/sky. If bgCen is not given by the info.json,
         # then a multi-region sampling of the background is performed and the
         # median of all background samples is subtracted from the image.
@@ -1808,7 +1817,6 @@ class Pipeline(object):
                 imgsHdrs[1].append(sci_headers[ii][:2])
 
             del unifiedImgs # don't need this anymore
-
 
         # Zero-pad images to uniform dimensions, depending on instrument.
         if self.instrument == 'stis':
@@ -2013,7 +2021,7 @@ class Pipeline(object):
                 # already be given in rotated frame.
                 # Always offset the coordinates based on the new aligned star
                 # center for reference images because those mask coordinates
-                # are only ever measured from the raw images.
+                # are only ever measured from the 1100x1100 xfc or sx2 images.
                 psfSubMasks_refs[ind] = mask_exclusions(mask=psfSubMasks_refs[ind],
                                             exclusions=exclusionsRef,
                                             cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
@@ -2024,18 +2032,18 @@ class Pipeline(object):
                 plt.figure(5)
                 plt.clf()
                 plt.imshow(psfSubMasks[ii])
-                plt.title(f"PSF Subtraction mask: img {ii}")
+                plt.title(f"PSF Subtraction mask (1=masked, 0=not masked): img {ii}")
 
                 plt.figure(6)
                 plt.clf()
                 plt.imshow(self.workingImgs[ii],
                             norm=SymLogNorm(linthresh=0.01, linscale=1,
                                             vmin=0, vmax=100))
-                plt.title(f"Aligned image: img {ii}")
+                plt.title(f"Aligned image (no mask shown): img {ii}")
 
                 plt.figure(7)
                 plt.clf()
-                plt.imshow(self.workingImgs[ii]*~sourceMasks[ii],
+                plt.imshow(self.workingImgs[ii] * ~psfSubMasks[ii],
                             norm=SymLogNorm(linthresh=0.01, linscale=1,
                                             vmin=0, vmax=100))
                 plt.title(f"Aligned image with PSF Subtraction mask: img {ii}")
@@ -2068,12 +2076,20 @@ class Pipeline(object):
                 self.subRadProf = False
 
             # Estimate initial brightness scaling for reference PSFs.
-            # S_sciImg = np.percentile(self.workingImgs[self.sciInds][~psfSubMasks[self.sciInds]], 99.9)
-            # S_refImg = np.percentile(self.workingImgs[self.refInds][~psfSubMasks[self.refInds]], 99.9)
-            S_sciImg = np.nansum(self.workingImgs[self.sciInds][~psfSubMasks[self.sciInds]])
-            S_refImg = np.nansum(self.workingImgs[self.refInds][~psfSubMasks[self.refInds]])
-            ratio_ref_sci = S_refImg/S_sciImg
-            self.logger.info("Ratio of reference PSF to science PSF "\
+            # Make a set of combination PSF subtraction masks that are the
+            # science masks + all (logical or) ref masks.
+            # Apply those combo masks to both science and ref images, then
+            # take their ratios and sum to get the approximate ratio of
+            # PSF brightnesses between ref and science images.
+            comboRefSciMasks = psfSubMasks[self.sciInds] | np.any(psfSubMasks[self.refInds], axis=0)
+            ratioSums_ref_sci = []
+            for ii, ind in enumerate(self.sciInds):
+                ratio_ref_sci_ii = np.nansum(np.nanmedian(self.workingImgs[self.refInds] * ~comboRefSciMasks[ii], axis=0)) / np.nansum(self.workingImgs[ind] * ~comboRefSciMasks[ii])
+                ratioSums_ref_sci.append(np.round(np.nansum(ratio_ref_sci_ii), 4))
+            self.logger.info("Ratios of reference PSF to science PSF by "\
+                             f"science image: {ratioSums_ref_sci}")
+            ratio_ref_sci = np.nanmedian(ratioSums_ref_sci)
+            self.logger.info("Median ratio of reference PSF to science PSF "\
                              f"brightness = {ratio_ref_sci:.3f}")
             # Don't let ratio stray too far from unity.
             if (ratio_ref_sci < 0.05) or (ratio_ref_sci > 20):
@@ -2275,7 +2291,6 @@ class Pipeline(object):
                                                        paList=info[obsMode]['radProfSub']['paList'],
                                                        paHW=info[obsMode]['radProfSub']['paHW'],
                                                        rMax=info[obsMode]['radProfSub']['rMax'])
-                del tmpImg
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 finalImg_noFinalProfSub = finalImg.copy()
                 finalImg -= meanRadProf
@@ -2301,6 +2316,9 @@ class Pipeline(object):
                     plt.title("Post-combine radial profile measured")
 
                     pdb.set_trace()
+
+                del tmpImg
+
             else:
                 finalImg_noFinalProfSub = None
 
