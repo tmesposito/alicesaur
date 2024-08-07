@@ -45,13 +45,6 @@ if platform.system() == 'Darwin':
 matplotlib.rcParams["image.origin"] = "lower"
 
 
-# FIX ME!!! Temp legacy information identifying STIS survey datasets that
-# already take image padding into account. TO BE DELETED.
-noOffsetDatasets = ['V-AK-SCO', 'GSC-07396-00759', 'HD-106906', 'HD-111161',
-                    'HD-114082', 'HD-115600', 'HD-117214',
-                    'HD-129590', 'HD-145560', 'HD-146897']
-
-
 class Pipeline(object):
     """
     Base reduction pipeline class for Hubble Space Telescope image processing.
@@ -781,9 +774,7 @@ class Pipeline(object):
         return np.array(imgsPadded)
 
 
-# FIX ME!!! noOffsetDatasets is a kludge specific to Esposito et al. in prep
-# that needs to be removed eventually.
-    def subtract_background(self, noOffsetDatasets=[]):
+    def subtract_background(self):
         """
         Subtract a global background from each image in self.workingImgs.
         """
@@ -794,9 +785,9 @@ class Pipeline(object):
                 if ii not in self.refInds:
                     bgCenRot = utils.rotate_yx(self.bgCen, self.alignStar,
                                                self.orientats[ii])
-    # FIX ME!!! For modern system of padding images, don't add the star offsets to the bg positions.
-                    if self.targ not in noOffsetDatasets:
-                        bgCenRot += self.alignStarOffsets[ii]
+    # # FIX ME!!! For modern system of padding images, don't add the star offsets to the bg positions.
+    #                 if self.targ not in noOffsetDatasets:
+    #                     bgCenRot += self.alignStarOffsets[ii]
                 # Still need to offset the reference image for these modern cases
                 # because bg positions are chosen from the raw images.
                 else:
@@ -1771,7 +1762,7 @@ class Pipeline(object):
         # median of all background samples is subtracted from the image.
         if np.all(self.bgCen != -1):
             self.logger.info("SUBTRACTING BACKGROUND from all images...")
-            self.subtract_background(noOffsetDatasets=noOffsetDatasets)
+            self.subtract_background()
             self.logger.info("Background means subtracted:\n{}".format(self.bgs))
         else:
             self.logger.warning("Skipping background subtraction (bgCen is -1)\n")
@@ -1914,13 +1905,7 @@ class Pipeline(object):
             # Mask out the occulted sections too, established earlier as very negative valued.
             sourceMasks[ind][alignMasks[ind] < 0] = np.nan
             # Now mask all of the excluded sources given in "exclude" json key.
-            if targ not in noOffsetDatasets:
-                sourceMasks[ind] = mask_exclusions(mask=sourceMasks[ind],
-                                       exclusions=exclusionsSci,
-                                       cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
-                                       paOffset=-1*orientats[ind], spikeAngles=self.spikeAngles)
-            else:
-                sourceMasks[ind] = mask_exclusions(mask=sourceMasks[ind],
+            sourceMasks[ind] = mask_exclusions(mask=sourceMasks[ind],
                                        exclusions=exclusionsSci,
                                        cen=self.alignStar, cenOffset=np.zeros(2),
                                        paOffset=-1*orientats[ind], spikeAngles=self.spikeAngles)
@@ -2276,13 +2261,7 @@ class Pipeline(object):
                 exclusionsFinal = exclusionsSci.copy()
                 exclusionsFinal['rect_cenYX_widthYX_angleDeg'] = []
                 finalMask = np.zeros(finalImg.shape, dtype=bool)
-                if targ not in noOffsetDatasets:
-                    finalMask = mask_exclusions(mask=finalMask,
-                                   exclusions=exclusionsFinal,
-                                   cen=self.alignStar, cenOffset=self.alignStar - self.starsOriginal[0],
-                                   paOffset=0, spikeAngles=self.spikeAngles)
-                else:
-                    finalMask = mask_exclusions(mask=finalMask,
+                finalMask = mask_exclusions(mask=finalMask,
                                    exclusions=exclusionsFinal,
                                    cen=self.alignStar, cenOffset=np.zeros(2),
                                    paOffset=0, spikeAngles=self.spikeAngles)
@@ -2344,15 +2323,7 @@ class Pipeline(object):
                                                       unitStart='counts s-1',
                                                       unitEnd='e-',
                                                       pscale=self.pscale)
-                if targ not in noOffsetDatasets:
-                    sourceMaskDerot = mask_exclusions(mask=spikemask,
-                                           exclusions=exclusionsSci,
-                                           cen=self.alignStar,
-                                           cenOffset=self.alignStarOffsets[0],
-                                           paOffset=0,
-                                           spikeAngles=self.spikeAngles)
-                else:
-                    sourceMaskDerot = mask_exclusions(mask=spikemask,
+                sourceMaskDerot = mask_exclusions(mask=spikemask,
                                            exclusions=exclusionsSci,
                                            cen=self.alignStar,
                                            cenOffset=np.zeros(2), paOffset=0,
