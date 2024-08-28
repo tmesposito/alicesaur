@@ -978,6 +978,7 @@ def get_partialann_stdmap(im, cen, radii, phi, phi_range, r_max=None, rdelta=1,
     phi=
     phi_range= [degrees]; 
     r_max= maximum radius to measure std dev.
+    rdelta: radial width of each annulus, in [pixels].
     """
     if r_max==None:
         r_max = radii.max()

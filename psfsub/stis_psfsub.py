@@ -359,6 +359,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
             return np.nan_to_num(sci - (10**ps[0])*ref, 0.).flatten()
 
     subImgs = []
+    subImgs_subRadProf = []
     refScaleFactors = []
     radii = make_radii(sciImgs[0], sciStars[0])
     if rmax is None:
@@ -472,6 +473,10 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
             if bgCen is not None:
                 bgCenRot = rotate_yx(bgCen, sciStar, orientats[ii])
                 subImg, bg = subtract_bg(subImg, bgCenRot, bgRadius)
+
+            # Store the PSF-subtracted image in a list.
+            subImgs.append(subImg)
+
             # Measure and subtract a radial profile from the
             # PSF-subtracted individual image.
             if subRadProf:
@@ -485,10 +490,7 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                                                        smooth=True,
                                                        mode='median')
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
-                subImgs.append(subImg - meanRadProf)
-            else:
-                subImgs.append(subImg)
-                meanRadProf = 0
+                subImgs_subRadProf.append(subImg - meanRadProf)
 
             # plt.figure(12)
             # plt.clf()
@@ -596,6 +598,10 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
             if bgCen is not None:
                 bgCenRot = rotate_yx(bgCen, sciStar, orientats[ii])
                 subImg, bg = subtract_bg(subImg, bgCenRot, bgRadius)
+
+            # Store the PSF-subtracted image in a list.
+            subImgs.append(subImg)
+
             # Measure and subtract a radial profile from the
             # PSF-subtracted individual image.
             if subRadProf:
@@ -606,18 +612,15 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                                         paList=radProfPaList - orientats[ii],
                                         paHW=radProfPaHW, rMax=radProfMax)
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
-                subImgs.append(subImg - meanRadProf)
+                subImgs_subRadProf.append(subImg - meanRadProf)
                 print("\nSubtracted mean radial profile after main "\
                       "PSF subtraction\n")
-            else:
-                subImgs.append(subImg)
-                meanRadProf = 0
 
             print(pf)
 
         subImgs = np.array(subImgs)
 
-    return subImgs, refScaleFactors
+    return subImgs, subImgs_subRadProf, refScaleFactors
 
 
 def adi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,

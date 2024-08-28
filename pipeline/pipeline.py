@@ -192,6 +192,8 @@ class Pipeline(object):
             infos = glob(os.path.join(infoDir, "info.json"))
             if len(infos) < 1:
                 infos = glob(os.path.join(infoDir, "../info.json"))
+                if len(infos) < 1:
+                    self.logger.warning("No info.json found. Using default values.\n")
             with open(infos[0]) as ff:
                 self.info = json.load(ff)
             self.infoPath = os.path.normpath(infos[0])
@@ -201,6 +203,7 @@ class Pipeline(object):
             self.infoPath = ''
             self.logger.warning(f"*** FAILED to load info.json from directory {infoDir}. "
                   + "Filling it with default values.\n")
+            self.logger.exception("info.json exception:")
 
         # Set info dict defaults if overriding values were not given in the
         # json file.
@@ -899,7 +902,7 @@ class Pipeline(object):
         for ii in range(len(imgs)):
             angle = orientats[ii]
             rotImgs.append(utils.rotate_array(imgs[ii], cens[ii], angle,
-                                              preserve_nan=True, cval=1))
+                                              preserve_nan=True, cval=np.nan))
     
         return np.array(rotImgs)
 
@@ -1253,7 +1256,8 @@ class Pipeline(object):
             cmt1 = f'{self.psfSubMode} PSF-subtracted combined image'
             if np.array(data).ndim == 3:
                 cmt1 += 's. Index 0 = all subtractions; Index 1 = no '\
-                    'post-combine radial profile subtraction.'
+                    'post-combine radial profile subtraction; Index 2 = no '\
+                    'radial profile subtractions at all.'
         elif imType == 'psfcube':
             filetype = 'Individual PSF-subtracted image cube'
             cmt1 = f'{self.psfSubMode} PSF-subtracted individual images'
@@ -1263,6 +1267,10 @@ class Pipeline(object):
         elif imType == 'snr':
             filetype = 'SNR map for final combined PSF-subtracted image'
             cmt1 = f'{self.psfSubMode} PSF-subtracted SNR map'
+            if np.array(data).ndim == 3:
+                cmt1 += 's. Index 0 = all subtractions; Index 1 = no '\
+                    'post-combine radial profile subtraction; Index 2 = no '\
+                    'radial profile subtractions at all.'
 
         if np.array(data).ndim > 3:
             hdul = fits.HDUList()
@@ -1321,6 +1329,8 @@ class Pipeline(object):
         newPriHdr['ORBCOMBI'] = (not self.noCombine, 'Stacked images per orbit before PSF sub?')
         newPriHdr['ANNULI'] = (self.ann, 'Number of subtraction region annuli')
         newPriHdr['SPWIDTH'] = (self.spWidth, 'Diff. spike mask width (pix)')
+        newPriHdr['PSFRIN'] = (self.exclusionsSci.get('r_in', np.nan), 'PSF subtraction inner radius (pix)')
+        newPriHdr['PSFROUT'] = (self.exclusionsSci.get('r_out', np.nan), 'PSF subtraction outer radius (pix)')
         newPriHdr['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
         try:
             newPriHdr.add_comment('Science images used: '\
@@ -1338,6 +1348,13 @@ class Pipeline(object):
             newPriHdr.add_comment('Post-collapse radial profile subtracted')
         newPriHdr.add_comment(cmt1)
         newPriHdr.add_comment('Reduction info file: {}'.format(self.infoPath))
+        try:
+            newPriHdr.add_comment('PSF-subtraction exclusions (science images): ' \
+                                   + str(self.exclusionsSci).replace('\n', ''))
+            newPriHdr.add_comment('PSF-subtraction exclusions (reference images): ' \
+                                   + str(self.exclusionsRef).replace('\n', ''))
+        except:
+            newPriHdr.add_comment('Failed to comment on exclusion regions')
         try:
             newPriHdr.add_comment('PSF-subtraction scale factors for reference images by science image: ' \
                                    + str(np.round(self.refScaleFactors, 5)).replace('\n', ''))
@@ -2084,7 +2101,7 @@ class Pipeline(object):
             C0 = np.log10(1/ratio_ref_sci)
 
             # Do the PSF subtraction.
-            psfSubImgs, refScaleFactors = stis_psfsub.rdi_subtract_psf(
+            psfSubImgs, psfSubImgs_subRadProf, refScaleFactors = stis_psfsub.rdi_subtract_psf(
                                     self.workingImgs[self.sciInds],
                                     self.workingImgs[self.refInds],
                                     psfSubMasks[self.sciInds],
@@ -2102,6 +2119,7 @@ class Pipeline(object):
                                     optimize_dither=True)
 
             self.psfSubImgs = psfSubImgs
+            self.psfSubImgs_subRadProf = psfSubImgs_subRadProf
             self.refScaleFactors = refScaleFactors
             self.logger.info(f"Ref scale factors by science image: {refScaleFactors}")
 
@@ -2165,6 +2183,7 @@ class Pipeline(object):
                 compute_correlation=True)
 
             self.psfSubImgs = []
+            self.psfSubImgs_subRadProf = []
             self.refScaleFactors = None
 
         # PyKLIP ADI subtraction.
@@ -2183,6 +2202,7 @@ class Pipeline(object):
                 compute_correlation=False)
 
             self.psfSubImgs = []
+            self.psfSubImgs_subRadProf = []
             self.refScaleFactors = None
 
         # Optionally save the individual PSF-subtracted images as a FITS cube.
@@ -2232,35 +2252,44 @@ class Pipeline(object):
                 aM[aM >= 0] = 0
                 aM[aM < 0] = 1
                 aM = aM.astype(bool)
-                psfSubImgs[ii][masks[self.sciInds][ii] + aM] = np.nan
+                self.psfSubImgs[ii][masks[self.sciInds][ii] + aM] = np.nan
+                try:
+                    self.psfSubImgs_subRadProf[ii][masks[self.sciInds][ii] + aM] = np.nan
+                except:
+                    self.logger.warning("*** FAILED to mask radial profile-subtracted PSF-subtracted images. Proceeding.")
+                    pass
 
             # Derotate and combined PSF-subtracted images.
             ("Derotating PSF-subtracted images...")
-            rotImgs = self.derotate(psfSubImgs, orientats[self.sciInds],
+            rotImgs = self.derotate(self.psfSubImgs, orientats[self.sciInds],
                                     self.stars[self.sciInds])
+            rotImgs_subRadProf = self.derotate(self.psfSubImgs_subRadProf,
+                                               orientats[self.sciInds],
+                                               self.stars[self.sciInds])
 
             # # Also make a copy with images derotated in the wrong direction.
             # # Make the widest deltaPA = 90 deg from being fully aligned.
             # spreadPAs = orientats[self.sciInds].copy()
             # spreadPAs[1:] -= np.arange(1, len(self.sciInds))*(90/(len(self.sciInds)-1))
-            # rotImgsBkwd = self.derotate(psfSubImgs, spreadPAs,
+            # rotImgsBkwd = self.derotate(self.psfSubImgs, spreadPAs,
             #                             self.stars[self.sciInds])
 
 
             # Optimize combination based on background levels, if needed.
             self.logger.info("Combining derotated images...")
             finalImg = np.nanmean(rotImgs, axis=0)
+            finalImg_subRadProf = np.nanmean(rotImgs_subRadProf, axis=0)
             # bkwdImg = np.nanmedian(rotImgsBkwd, axis=0)
 
             # Subtract radial profile from final combined image to remove
             # residual halo.
             if self.subFinalRadProf:
-                tmpImg = finalImg.copy()
+                tmpImg = finalImg_subRadProf.copy()
                 # tmpImg = bkwdImg.copy()
                 # Remove disk mask from exclusions.
                 exclusionsFinal = exclusionsSci.copy()
                 exclusionsFinal['rect_cenYX_widthYX_angleDeg'] = []
-                finalMask = np.zeros(finalImg.shape, dtype=bool)
+                finalMask = np.zeros(tmpImg.shape, dtype=bool)
                 finalMask = mask_exclusions(mask=finalMask,
                                    exclusions=exclusionsFinal,
                                    cen=self.alignStar, cenOffset=np.zeros(2),
@@ -2271,8 +2300,16 @@ class Pipeline(object):
                                                        paHW=info[obsMode]['radProfSub']['paHW'],
                                                        rMax=info[obsMode]['radProfSub']['rMax'])
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
-                finalImg_noFinalProfSub = finalImg.copy()
-                finalImg -= meanRadProf
+                # Keep the "pure" final image pure (no radial profile
+                # subtraction at all), still defined as finalImg.
+                # Keep the final image with radial profile subtraction only
+                # done during the PSF subtraction phase.
+                finalImg_noFinalProfSub = finalImg_subRadProf
+                # Subtract the final radial profile from the final image
+                # that was already radial profile-subtracted during the
+                # PSF subtraction phase.
+                finalImg_finalProfSub = finalImg_subRadProf - meanRadProf
+
 
                 if self.debug:
                     plt.figure(15)
@@ -2304,17 +2341,26 @@ class Pipeline(object):
             # Do one final background subtraction.
             if info[obsMode].get('bgCenFinal_yx') is not None:
                 finalImg, bgFinal = utils.subtract_bg(finalImg, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
+                finalImg_noFinalProfSub, bgFinal = utils.subtract_bg(finalImg_noFinalProfSub, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
+                finalImg_finalProfSub, bgFinal = utils.subtract_bg(finalImg_finalProfSub, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
 
-            # Write the final combined PSF-subtracted image to FITS file.
+            # Write the final combined PSF-subtracted image(s) to FITS file.
             if self.saveFinal:
                 if finalImg_noFinalProfSub is None:
                     self.save_psfsub_to_fits(finalImg, 'final',
                                              unit=newUnit, cid=self.cid)
                 else:
-                    self.save_psfsub_to_fits(np.array([finalImg, finalImg_noFinalProfSub]),
+                    # Index order: 0 = all subtractions;
+                    # 1 = no final radial profile subtraction
+                    # 2 = no radial profile subtracts at all
+                    self.save_psfsub_to_fits(np.array([finalImg_finalProfSub,
+                                                       finalImg_noFinalProfSub,
+                                                       finalImg]),
                                              'final', unit=newUnit,
                                              cid=self.cid)
 
+# FIX ME!!! Compute error maps for each version of the final image.
+# Currently only compute for the version with no radial profile subtractions at all.
             # Compute error maps.
             if not self.noErrorMaps:
                 self.logger.info("Computing ERROR MAPS...")
@@ -2329,16 +2375,19 @@ class Pipeline(object):
                                            cenOffset=np.zeros(2), paOffset=0,
                                            spikeAngles=self.spikeAngles)
                 sourceMaskDerot[sourceMaskDerot == 1] = np.nan
-                stdPACen = info['diskPA_deg'] - 90.
+
+                # Sample the noise around the disk minor axis on its back edge.
+                # Define the angles for this region.
+                stdPACen = info['diskPA_deg'] + 90.
                 if stdPACen < 0:
                     stdPACen += 360.
-                stdPAMin = stdPACen - 40.
+                stdPAMin = stdPACen - 60.
                 if stdPAMin < 0:
                     stdPAMin += 360.
                     stdPARange1 = [stdPAMin, 360]
                 else:
                     stdPARange1 = [stdPAMin, stdPACen]
-                stdPAMax = stdPACen + 40.
+                stdPAMax = stdPACen + 60.
                 if stdPAMax > 360:
                     stdPAMax -= 360.
                     stdPARange2 = [0, stdPAMax]
@@ -2347,8 +2396,8 @@ class Pipeline(object):
                 if stdPAMin > stdPAMax:
                     stdPARange2 = [0, stdPAMax]
                 stdPARange = stdPARange1 + stdPARange2
+
                 errorMaps_electrons = []
-    
                 for ii in tqdm(range(len(rotImgs)), desc="Error maps"):
                     poissonMap = np.sqrt(np.abs(rotImgs_electrons[ii]))
                     theta = utils.make_phi(rotImgs_electrons[ii], self.alignStar,
@@ -2375,7 +2424,12 @@ class Pipeline(object):
                                                        int(self.alignStar[1]-70):int(self.alignStar[1])], 3)
                     stdStrip2 = gaussian_filter(stdMap[int(self.alignStar[0]),
                                                        int(self.alignStar[1]+1):int(self.alignStar[1]+1+70)], 3)
-                    stdStrip = np.nanmean([stdStrip1, stdStrip2[::-1]], axis=0)
+                    stdStrip3 = gaussian_filter(stdMap[int(self.alignStar[0]-70):int(self.alignStar[0]),
+                                                       int(self.alignStar[1])], 3)
+                    stdStrip4 = gaussian_filter(stdMap[int(self.alignStar[0]+1):int(self.alignStar[0]+1+70),
+                                                       int(self.alignStar[1])], 3)
+                    stdStrip = np.nanmean([stdStrip1, stdStrip2[::-1], stdStrip3, stdStrip4[::-1]], axis=0)
+
                     fe = interp1d(np.arange(self.alignStar[1]-70, self.alignStar[1])[~np.isnan(stdStrip)],
                                   gaussian_filter(stdMap[int(self.alignStar[0]), int(self.alignStar[1]-70):int(self.alignStar[1])], 3)[~np.isnan(stdStrip)],
                                   kind='linear', fill_value="extrapolate")
@@ -2399,7 +2453,9 @@ class Pipeline(object):
                 finalErrorMap = np.sqrt(np.nansum(errorMaps**2, axis=0))/np.sqrt(countAveragedPix)
                 
                 finalSNR = finalImg/finalErrorMap # [SNR]
-                
+                finalSNR_noFinalProfSub = finalImg_noFinalProfSub/finalErrorMap # [SNR]
+                finalSNR_finalProfSub = finalImg_finalProfSub/finalErrorMap # [SNR]
+
                 if self.saveFinal:
                     # Save the error map and SNR map too.
                     try:
@@ -2408,7 +2464,10 @@ class Pipeline(object):
                     except:
                         self.logger.error("*** FAILED to save Error map!!!\n")
                     try:
-                        self.save_psfsub_to_fits(finalSNR, 'snr',
+                        self.save_psfsub_to_fits([finalSNR_finalProfSub,
+                                                  finalSNR_noFinalProfSub,
+                                                  finalSNR],
+                                                 'snr',
                                                  unit=newUnit, cid=self.cid)
                     except:
                         self.logger.error("*** FAILED to save SNR map!!!\n")
