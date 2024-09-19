@@ -3,17 +3,84 @@
 import os
 import shutil
 import pdb
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import SymLogNorm
 import json
 from glob import glob
+from datetime import datetime
 from astropy.io import fits
 from scipy.ndimage import gaussian_filter, median_filter, interpolation, filters, map_coordinates
 from emcee import EnsembleSampler
 from emcee.interruptible_pool import InterruptiblePool
 import hickle
 from corner import corner
+
+
+def set_up_logger(loggerName=None, logPath=None, startTime=None, level='INFO'):
+    """
+    Create a logging object. At least output the log to stdout (console).
+    If logPath is given, also output to that file.
+
+    Parameters
+    ----------
+    logPath : str, optional
+        Path to the file for log output. If None, no log file is written
+        (the default).
+    startTime : TYPE, optional
+        DESCRIPTION. The default is None.
+    level : str, optional
+        Python logging level. The default is 'INFO'.
+
+    Returns
+    -------
+    None
+
+    """
+    # Set a default name for the logger if none is given.
+    if loggerName is None:
+        loggerName = 'alicesaur_logger'
+
+    # Either inherit an existing logger of this name or create a new one.
+    logger = logging.getLogger(loggerName)
+
+    if not logger.hasHandlers():
+        if startTime is None:
+            startTime = datetime.utcnow().strftime('%Y-%m-%dT%H-%M-%S')
+
+        formatter = logging.Formatter('%(asctime)s :: %(levelname)s: %(message)s',
+                                      '%H:%M:%S')
+
+        logger.setLevel(logging.getLevelName(level))
+
+        # Create a stream handler to print logs to the console
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.getLevelName(level))
+        console_handler.setFormatter(formatter)
+
+        # Add the console handler to the logger
+        logger.addHandler(console_handler)
+
+        # Create a file handler to write logs to a file
+        if logPath is not None:
+            try:
+                # Create a 'logs' parent directory if it doesn't exist yet.
+                check_mkdir(os.path.join(os.path.dirname(logPath), '..', 'logs'))
+
+                file_handler = logging.FileHandler(logPath)
+                file_handler.setLevel(logging.getLevelName(level))
+                file_handler.setFormatter(formatter)
+                # Add the file handler to the logger
+                logger.addHandler(file_handler)
+            except Exception as ee:
+                logger.error(ee)
+                logger.error(f"*** FAILED to write log file to {logPath}. Will only"\
+                             " log to stdout\n")
+
+        logger.info(f'Started CTI logger at UTC {startTime}')
+
+    return logger
 
 
 def make_radii(arr, cen):

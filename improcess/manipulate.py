@@ -13,7 +13,7 @@ from ..utils import make_radii
 
 
 def stack_images(imPaths, errorPaths=[], mode='weightedMean', negToNan=False,
-                 downweightNeg=False, maskRadii=None):
+                 downweightNeg=False, maskRadii=None, dataInds=None):
     """
     Combinate images by stacking using one of multiple methods given with
     the 'mode' argument.
@@ -33,9 +33,15 @@ def stack_images(imPaths, errorPaths=[], mode='weightedMean', negToNan=False,
     err = []
     hdrs_err = []
 
-    for ff in imPaths:
+    if dataInds is None:
+        dataInds = len(imPaths)*[0]
+
+    for ii, ff in enumerate(imPaths):
         with fits.open(ff) as hdul:
-            data.append(hdul[0].data)
+            if hdul[0].data.ndim > 2:
+                data.append(hdul[0].data[dataInds[ii]])
+            else:
+                data.append(hdul[0].data)
             hdrs.append(hdul[0].header)
 
     for ii, ff in enumerate(errorPaths):

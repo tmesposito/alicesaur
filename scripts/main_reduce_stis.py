@@ -24,7 +24,7 @@ if __name__ == "__main__":
 
     desc = 'Path to directory containing FITS data for processing.'
     parser.add_argument('--dataDir', metavar='dataDir',
-                        default="./", type=str, nargs='?',
+                        default=None, type=str, nargs='?',
                         help=desc)
 
     desc = 'Instrument from which the data originated: stis (default) or acs.'

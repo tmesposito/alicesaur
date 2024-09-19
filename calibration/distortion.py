@@ -8,6 +8,7 @@ Created on Wed Dec 13 11:19:14 2023
 import os
 import shutil
 from distutils import spawn
+import numpy as np
 # from drizzlepac import astrodrizzle
 # from drizzlepac.stisData import STISInputImage
 from stistools.x2d import x2d
@@ -43,21 +44,24 @@ def correct_distortion(imgPathList, outputPaths="", refDir=None, inst='stis',
                   " parent directory or provide that path here with the"\
                   " refDir argument.")
 
-    undistort_images(imgPathList, outputPaths=outputPaths, overwrite=overwrite)
+    success_list = undistort_images(imgPathList, outputPaths=outputPaths,
+                                    overwrite=overwrite)
 
-    return
+    return success_list
 
 
 def undistort_images(imgPathList, outputPaths="", overwrite=False):
 
     if overwrite:
         print("WARNING: Will overwrite existing x2d.fits files")
+        
+    success_list = []
 
     for ii, imgPath in enumerate(imgPathList):
-        undistort_single_image(imgPath, outputPath=outputPaths[ii],
-                               overwrite=overwrite)
+        success_list.append(undistort_single_image(imgPath, outputPath=outputPaths[ii],
+                                         overwrite=overwrite))
 
-    return
+    return np.array(success_list)
 
 
 def undistort_single_image(imgPath, outputPath="", overwrite=False):
@@ -126,12 +130,14 @@ def undistort_single_image(imgPath, outputPath="", overwrite=False):
             if os.path.exists(outputPath + '-backup'):
                 os.remove(outputPath + '-backup')
     elif x2d_status == 1:
-        print("\nHELP! The IRAF executable 'cs7.e' was not found to do"\
-              " the distortion correction. Please make sure it is in your"\
+        print("\nHELP! Distortion correction failed. Either the required "\
+              "IRAF executable 'cs7.e' was not found or the correction"\
+              " was attempted and failed. Please make sure cs7.e is in your"\
               " environment's system path.")
     elif x2d_status == 2:
-        print("\nHELP! The IRAF executable 'cs7.e' was not found to do"\
-              " the distortion correction. Please make sure it is in your"\
+        print("\nHELP! Distortion correction failed. Either the required "\
+              "IRAF executable 'cs7.e' was not found or the correction"\
+              " was attempted and failed. Please make sure cs7.e is in your"\
               " environment's system path.")
     elif x2d_status > 2:
         print("\nWARNING! Something unknown went wrong during distortion"\
@@ -142,12 +148,15 @@ def undistort_single_image(imgPath, outputPath="", overwrite=False):
         if overwrite:
             if os.path.exists(outputPath + '-backup'):
                 os.remove(outputPath + '-backup')
+
+        return True
+
     else:
         if overwrite:
             if os.path.exists(outputPath + '-backup'):
                 shutil.move(outputPath + '-backup', outputPath)
 
-    return
+        return False
 
 
 # def custom_x2d_cs7(fileList):

@@ -6,6 +6,7 @@ import os
 import pdb
 import copy
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import cm, patches
 from matplotlib.colors import SymLogNorm
@@ -25,12 +26,17 @@ from .plot_utils import *
 from alicesaur.calibration.flux import convert_intensity
 
 
+#---- SET MATPLOTLIB PARAMS ----#
+matplotlib.rcParams['image.origin'] = 'lower'
+
+
 #---- DEFINE CONSTANTS ----#
 pscale_stis = 0.0507 # [arcsec/pixel]
 
 
 def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
-                       vmax_stis=None, vmax_gpi=None, makeColorbar=False):
+                       vmax_stis=None, vmax_gpi=None, makeColorbar=False,
+                       stis_cube_inds=None):
 # FIX ME!!! Remove this dependence on a private external package.
     from gpi_python.gpidisks1 import axMaker
 
@@ -47,14 +53,19 @@ def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
                           axDim=None, wdw=None, spR=0,
                           spC=0, spEdge=spEdge, hold=False, figNum=999)
 
+    if stis_cube_inds is None:
+        stis_cube_inds = len(targList)*[None]
+
     vmax_list = []
     for ii, targName in enumerate(targList):
         axList = axAll[ii]
-        outputAxes, vmax_stis_out = plot_stis_gpi_side(targName, stisCombo=True, roi=[(-7, 7), (-7, 7)],
+        outputAxes, vmax_stis_out = plot_stis_gpi_side(targName, stisCombo=True,
+                                                       roi=[(-9, 9), (-9, 9)],
                                     maskEdges=0.5, labelPanels=False, smoothContours=True,
                                     gpiOverlay=gpiOverlay, zoomGpi=zoomGpi, figAxes=(fig, axList),
                                     sbcal=sbcal, vmax_stis=vmax_stis, vmax_gpi=vmax_gpi,
-                                    outputAxes=True, makeColorbar=False, save=False)
+                                    outputAxes=True, makeColorbar=False,
+                                    stis_cube_inds=stis_cube_inds[ii], save=False)
         vmax_list.append(vmax_stis_out)
 
     vmax_list = np.array(vmax_list)
@@ -62,17 +73,18 @@ def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
     
     print(f"SB scale max values by row: {vmax_list}")
 
+    fs_columns = 11
     # Label columns.
-    axAll[0][0].text(0.5, 0.96, 'STIS: Average', c='w', fontsize=12,
+    axAll[0][0].text(0.5, 0.96, 'STIS: Average', c='w', fontsize=fs_columns,
         horizontalalignment='center', verticalalignment='top',
         transform=axAll[0][0].transAxes)
-    axAll[0][1].text(0.5, 0.96, 'STIS: Wide', c='w', fontsize=12,
+    axAll[0][1].text(0.5, 0.96, 'STIS: Wide', c='w', fontsize=fs_columns,
         horizontalalignment='center', verticalalignment='top',
         transform=axAll[0][1].transAxes)
-    axAll[0][2].text(0.5, 0.96, 'STIS: Narrow', c='w', fontsize=12,
+    axAll[0][2].text(0.5, 0.96, 'STIS: Narrow', c='w', fontsize=fs_columns,
         horizontalalignment='center', verticalalignment='top',
         transform=axAll[0][2].transAxes)
-    axAll[0][3].text(0.5, 0.96, 'GPI: H Pol', c='w', fontsize=12,
+    axAll[0][3].text(0.5, 0.96, 'GPI: H Pol', c='w', fontsize=fs_columns,
         horizontalalignment='center', verticalalignment='top',
         transform=axAll[0][3].transAxes)
     
@@ -210,13 +222,19 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
         if stis_paths is None:
             stis_paths = [det_fns[targName]['wedge'],
                           det_fns[targName]['bar']]
-            stis_cube_inds = [det_fns[targName].get('wedgeInd', 0),
-                              det_fns[targName].get('barInd', 0)]
+            if stis_cube_inds is None:
+                stis_cube_inds = [det_fns[targName].get('wedgeInd', 0),
+                                  det_fns[targName].get('barInd', 0)]
         if gpi_path is None:
             gpi_path = det_fns[targName]['rstokes']
 
+    # Set the STIS cube indices based on the input arg, if given.
     if stis_cube_inds is None:
         stis_cube_inds = len(stis_paths)*[0]
+    elif type(stis_cube_inds) not in [list, np.ndarray, tuple]:
+        stis_cube_inds = len(stis_paths)*[stis_cube_inds]
+    elif len(stis_cube_inds) < len(stis_paths):
+        stis_cube_inds = len(stis_paths)*[stis_cube_inds[0]]
 
     stis_hdus = []
     stis = []
@@ -619,7 +637,9 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
                 fluxcal_fac = 1.
                 linthresh_gpi = gpi_std
 
-            axGpi.imshow((fluxcal_fac*scale_Qr/itime)*gpi[wdw_zoom_gpi[0][0]:wdw_zoom_gpi[0][1], wdw_zoom_gpi[1][0]:wdw_zoom_gpi[1][1]],
+            patch_gpi = (fluxcal_fac*scale_Qr/itime)*gpi[wdw_zoom_gpi[0][0]:wdw_zoom_gpi[0][1], wdw_zoom_gpi[1][0]:wdw_zoom_gpi[1][1]]
+            patch_gpi[patch_gpi == 0] = np.nan
+            axGpi.imshow(patch_gpi,
                         cmap=cmap,
                         norm=SymLogNorm(linthresh=linthresh_gpi, linscale=1., vmin=0., vmax=vmax_gpi, base=10),
                         extent=[(wdw_zoom_gpi[1][0]-cen_gpi_int[1])*pscale_gpi,
@@ -675,7 +695,7 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
     # Label the target name.
     labelName = True
     if labelName:
-        name_txt = ax0.text(0.05, 0.02, targName, color=tc, fontsize=fs, weight='normal',
+        name_txt = ax0.text(0.05, 0.02, targName, color=tc, fontsize=fs-1, weight='normal',
                             horizontalalignment='left', verticalalignment='bottom', transform=ax0.transAxes)
     # Label the panels.
     for ii, ax in enumerate(axList):
@@ -684,7 +704,7 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
             sideways = True
             if sideways:
                 # ax_title = fig.add_axes([0.021, 0.9, 0.2, 0.1])
-                panel_txt = ax.text(0.5, 0.91, panelLabels[ii], color=tc, fontsize=fs, weight='normal',
+                panel_txt = ax.text(0.5, 0.91, panelLabels[ii], color=tc, fontsize=fs-1, weight='normal',
                                     horizontalalignment='center', verticalalignment='bottom', transform=ax.transAxes)
             # else:
             #     ax_title = fig.add_axes([0.008, 0.925, 0.2, 0.1])

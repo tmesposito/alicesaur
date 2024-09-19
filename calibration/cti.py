@@ -36,7 +36,7 @@ from astroquery.mast import Observations
 # Custom package, copy_files.py should be in the same directory
 import copy_files as cf
 
-from alicesaur.utils import check_mkdir
+from alicesaur.utils import check_mkdir, set_up_logger
 
 
 class CTI():
@@ -48,41 +48,26 @@ class CTI():
         """
         Constructor of the CTI class.
         """
-        
-        print (f'stis_cti v{stis_cti_version}')
-        
+
         # # Check astroquery Observations options
         # Observations.get_metadata("observations")
         # Observations.get_metadata("products")
-        
+
         self.obsMode = None
-        
+        self.loggerName = None
+
         # Define attributes with kwargs items
         for key, val in kwargs.items():
             setattr(self, key, val)
 
+        # Log output if possible, otherwise just print it.
+        self.logger = set_up_logger(loggerName=self.loggerName)
+        # if not hasattr(self, 'loggerName'):
+        #     self.logger = None
 
-    def check_mkdir(self, new_dir):
-        """Check for and make directory.
-        
-        Function to check for a directory and make it if it doesn't exist.
-        
-        Parameters
-        ----------
-        new_dir : str
-            Path of directory to check for/make.
-        
-        """
-        
-        # Check for directory
-        if os.path.exists(new_dir):
-            print('Directory exists: {}'.format(new_dir))
-        else:
-            # Make directory
-            os.makedirs(new_dir, 0o774)
-            print('Created directory: {}'.format(new_dir))
-            
-        return
+        self.logger.debug("CTI correction: Created CTI correction object")
+
+        self.logger.info(f'CTI correction: stis_cti v{stis_cti_version}')
 
 
     def setup_directories(self, base_dir=None):
@@ -94,6 +79,8 @@ class CTI():
             self.base_dir = os.path.abspath(cwd)
         else:
             self.base_dir = os.path.abspath(base_dir)
+
+        self.logger.info(f"CTI correction: Creating CTI directories inside {self.base_dir}")
 
         # Set temporary data download store
         self.cache_dir = os.path.join(self.base_dir, 'data_cache')
@@ -131,13 +118,16 @@ class CTI():
 
 
     def setup_env(self):
-        
+
         # Set environment variables
         os.environ['CRDS_SERVER_URL'] = 'https://hst-crds.stsci.edu'
         os.environ['CRDS_PATH'] = os.path.abspath(self.ref_dir)
         os.environ['oref'] = os.path.join(os.path.abspath(self.ref_dir), 'references', 'hst', 'stis') + os.path.sep   # Trailing slash important
-        # print('oref: {}'.format(os.environ['oref']))
-        
+
+        self.logger.info("CTI correction: Set CTI environment variables")
+        for envvar in ['CRDS_SERVER_URL', 'CRDS_PATH', 'oref']:
+            self.logger.debug(f"CTI correction: {envvar} = {os.environ[envvar]}")
+
         return
 
 
@@ -189,26 +179,44 @@ class CTI():
             obs.sort('t_min')
             # Get the list of data products associated with the obs.
             products = Observations.get_product_list(obs)
+
             # Separate out obs for only PSF reference stars.
-            obs_calPSF = obs[obs['target_classification'] == 'CALIBRATION;POINT SPREAD FUNCTION']
+            # First grab anything with both 'PSF' and the science target's name
+            # in the obs target name.
+            if target_name is not None:
+                PSFrefs_by_name = np.array([(('PSF' in tn) and ((target_name in tn) | (target_name.replace('-', '') in tn))) for tn in obs['target_name'].data])
+            else:
+                PSFrefs_by_name = np.array(len(obs)*[False])
+            # If none found like that, expand to just 'PSF' in the target name.
+            if np.sum(PSFrefs_by_name) == 0:
+                PSFrefs_by_name = np.array(['PSF' in tn for tn in obs['target_name'].data])
+                # Then grab anything with a specific target classification.
+                obs_calPSF = obs[(obs['target_classification'] == 'CALIBRATION;POINT SPREAD FUNCTION') |
+                                 PSFrefs_by_name]
+            else:
+                obs_calPSF = obs[PSFrefs_by_name]
             # obs_calPSF['instrument_name', 'filters', 'wavelength_region', 'target_name', 'target_classification', 'obs_id', 'obsid'].pprint(max_width=-1)
+
             if target_name is not None:
                 obs_target = obs[obs['target_name'] == target_name]
                 # Get obs_id's for this target's images only.
                 oids_for_target = list(np.unique(obs_target['obs_id']))
                 t_start_target = min(obs_target['t_min'])
                 t_end_target = max(obs_target['t_max'])
+
                 # Locate PSF reference stars observed in the middle of the target obs.
                 # If none, look immediately before and after the target obs.
                 # Make sure to match the camera settings.
                 obs_calPSF_match = obs_calPSF[(obs_calPSF['t_min'] >= t_start_target) & (obs_calPSF['t_min'] <= t_end_target)]
-                print(f"\nFound {len(obs_calPSF_match)} PSF reference star images amid science images")
-                print(f"PSF reference stars found: {list(np.unique(obs_calPSF_match['target_name']))}")
+                self.logger.info(f"Data Fetch: Found {len(obs_calPSF_match)} PSF reference star images amid science images")
+                self.logger.info(f"Data Fetch: PSF reference stars found: {list(np.unique(obs_calPSF_match['target_name']))}")
                 # Get obs_id's for the PSF reference images.
                 oids_for_refs = list(np.unique(obs_calPSF_match['obs_id']))
                 # Combine all target and ref oids into one list.
                 oids = oids_for_target
                 oids += oids_for_refs
+# FIX ME!!! This method will grab too many non-PSF reference images if there
+# are multiple chunks of target images spread out in time.
                 # Try to identify reference images by timing if they are not
                 # labeled via target_classification.
                 # Assume any target observed between the first and last target
@@ -233,8 +241,8 @@ class CTI():
         # Weed out duplicate oids.
         oids = np.unique(oids).tolist()
 
-        print('{} observation IDs found for {} proposal IDs:'.format(len(oids), len(pids)))
-        print(oids)
+        self.logger.info('Data Fetch: {} observation IDs found for {} proposal IDs:'.format(len(oids), len(pids)))
+        self.logger.info(oids)
 
         return oids, products, obs
 
@@ -267,15 +275,15 @@ class CTI():
             cache_dir = self.cache_dir
 
         assert os.path.isdir(destination), 'Destination must be a directory'
-        
-        print('\nDownloading & copying data to {}\n'.format(destination))
-    
+
+        self.logger.info('Data Fetch: Downloading & copying data to {}\n'.format(destination))
+
         # Get data products for each observation ID
         obs = Observations.query_criteria(obs_id=ids)    
         products = Observations.get_product_list(obs)
         if product_types is not None:
             products = products[[x.upper() in product_types for x in products['productSubGroupDescription']]]
-        
+
         # Download data and combine into the destination directory
         with TemporaryDirectory(prefix='downloads', dir=cache_dir) as d:
             dl = Observations.download_products(products, mrp_only=False, download_dir=d)
@@ -287,15 +295,15 @@ class CTI():
                     if (download_mode == 'science') and \
                             (self.obsMode is not None) and \
                             (occulter != self.obsMode.upper()):
-                        print(f"Ignoring {os.path.basename(filename)} for "\
-                              f"non-matching occulter ({occulter})")
+                        self.logger.info(f"Ignoring {os.path.basename(filename)} for "\
+                                         f"non-matching occulter ({occulter})")
                         continue
                 shutil.copy(filename, destination)
 
 
     # Find and update the headers with the best reference files and download them
     def download_ref_files(self, image_list):
-        print(f'Downloading reference files for:\n{image_list}\n')
+        self.logger.info(f'CTI correction: Downloading reference files for:\n{image_list}\n')
         images = ' '.join(image_list)
         subprocess.check_output('crds bestrefs --files {} --sync-references=1 --update-bestrefs'.format(images),
                                 shell=True, stderr=subprocess.DEVNULL)
@@ -315,7 +323,7 @@ class CTI():
 
         self.download_data(dark_exposures, self.darks,
                            product_types={'FLT', 'EPC', 'SPT'})
-        print("Finished downloading dark data\n")
+        self.logger.info("CTI correction: Finished downloading dark data\n")
 
 
     def make_working_copies(self, exts=['*_raw.fits', '*_epc.fits', '*_spt.fits', '*_asn.fits', '*_flt.fits', '*_crj.fits']):
@@ -339,7 +347,7 @@ class CTI():
         # Choices for product_types: 'RAW', 'FLT', 'CRJ', 'EPC', 'SPT', 'ASN', 'SX2'
         self.download_data(self.ccd_oids, self.ccd_dir, product_types={'RAW'},
                            download_mode='science')
-        print("Finished downloading CCD data\n")
+        self.logger.info("CTI correction: Finished downloading CCD data\n")
 
         # Download reference files.
         # # Check in the Notebook directory
@@ -349,33 +357,44 @@ class CTI():
         # self.ccd_list = glob.glob(os.path.join(self.ccd_dir, '*_flt.fits'))
         # ccd_list = [fp.replace('flt.fits', 'raw.fits') for fp in tmp_list]
         self.download_ref_files(self.ccd_list)
-        print("Finished downloading reference files\n")
+        self.logger.info("CTI correction: Finished downloading reference files\n")
 
         # Copy files for processing.
         self.make_working_copies()
 
         self.download_darks()
         # Run the CTI correction.
-        stis_cti(science_dir=os.path.abspath(self.science),
-                 dark_dir=os.path.abspath(self.darks),
-                 ref_dir=os.path.abspath(self.ref_cti),
-                 num_processes=15,
-                 verbose=2,
-                 clean=True)
-                 # clean_all= True)
+        try:
+            stis_cti(science_dir=os.path.abspath(self.science),
+                     dark_dir=os.path.abspath(self.darks),
+                     ref_dir=os.path.abspath(self.ref_cti),
+                     num_processes=15,
+                     verbose=2,
+                     clean=True)
+                     # clean_all= True)
 
-        self.post_cti_checks()
-        
-        # Copy CTI-corrected FITS files to the main data directory.
-        cf.copy_files_check(self.science, self.base_dir, files='*_flc.fits')
+            self.post_cti_checks()
 
-        if clean:
-            self.cleanup()
+            # Copy CTI-corrected FITS files to the main data directory.
+            cf.copy_files_check(self.science, self.base_dir, files='*_flc.fits')
 
-        return
+            if clean:
+                self.cleanup()
+
+            return True
+
+        except Exception:
+            self.logger.exception("CTI correction: CTI correction FAILED!")
+
+            if clean:
+                self.cleanup()
+
+            return False
+
 
     def post_cti_checks(self):
 
+        self.logger.info("CTI correction: Post-CTI checks...")
         # Print information for each file, check those that have been CTI corrected
         # os.chdir(cwd)
         # files = glob.glob(os.path.join(os.path.abspath(science), '*raw.fits'))
@@ -395,24 +414,61 @@ class CTI():
 
             # Get file info
             if yr <= 2004: 
-                print('\n...PRE-SM4 ({}), NOT CTE CORRECTED...'.format(yr))
+                self.logger.info('\n...PRE-SM4 ({}), NOT CTE CORRECTED...'.format(yr))
                 psm4 += 1
             # elif os.path.exists(f.replace('raw.fits', 'cte.fits')):
             elif os.path.exists(f.replace('flt.fits', 'flc.fits')):
-                print('\n***CTE CORRECTED, AMP {} ({})***'.format(hdr['CCDAMP'], yr))
+                self.logger.info('\n***CTE CORRECTED, AMP {} ({})***'.format(hdr['CCDAMP'], yr))
                 ampd += 1
             else: 
                 ampo += 1
-                print('\n~NON-CTE CORRECTED, AMP {} ({})~'.format(hdr['CCDAMP'], yr))
-            print('FILE: {}, PID: {}, ROOT: {}'.format(os.path.basename(f), hdr['PROPOSID'], hdr['ROOTNAME']))
-            print('INST: {}, DETECTOR: {}, AP: {}'.format(hdr['INSTRUME'], hdr['DETECTOR'], hdr['APERTURE']))
-            print('DATE OBS:{}, PROCESSED: {}'.format(hdr['TDATEOBS'], hdr['DATE']))
+                self.logger.info('\n~NON-CTE CORRECTED, AMP {} ({})~'.format(hdr['CCDAMP'], yr))
+            self.logger.info('FILE: {}, PID: {}, ROOT: {}'.format(os.path.basename(f), hdr['PROPOSID'], hdr['ROOTNAME']))
+            self.logger.info('INST: {}, DETECTOR: {}, AP: {}'.format(hdr['INSTRUME'], hdr['DETECTOR'], hdr['APERTURE']))
+            self.logger.info('DATE OBS:{}, PROCESSED: {}'.format(hdr['TDATEOBS'], hdr['DATE']))
 
         # Run checks on data
         nraw = len(glob.glob(os.path.join(self.science, '*raw.fits')))
         ncte = len(glob.glob(os.path.join(self.science, '*cte.fits')))
-        print(f'{nraw} raw CCD files input, {ncte} CTE corrected files output')   # Should be equal if all data taken on amp D and post-SM4
-        print(f'{psm4} pre-SM4, {ampd} amp D (CTE corr), {ampo} other amp (non-CTE)')
+        self.logger.info(f'{nraw} raw CCD files input, {ncte} CTE corrected files output')   # Should be equal if all data taken on amp D and post-SM4
+        self.logger.info(f'{psm4} pre-SM4, {ampd} amp D (CTE corr), {ampo} other amp (non-CTE)')
+
+
+    def download_without_cti(self, pids, target_name=None, clean=True):
+        """
+        Download fits files but do not attempt to correct them. Just move them
+        to the destination directory.
+
+        Parameters
+        ----------
+        pids : TYPE
+            DESCRIPTION.
+        target_name : TYPE, optional
+            DESCRIPTION. The default is None.
+        clean : TYPE, optional
+            DESCRIPTION. The default is True.
+
+        Returns
+        -------
+        None.
+
+        """
+
+        # Get the obs_id values from the PIDs.
+        self.pids = pids
+        self.ccd_oids, products, obs = self.get_oids(pids, target_name=target_name)
+
+        # Download data.
+        # Choices for product_types: 'RAW', 'FLT', 'CRJ', 'EPC', 'SPT', 'ASN', 'SX2'
+        self.download_data(self.ccd_oids, self.ccd_dir, product_types={'FLT'},
+                           download_mode='science')
+        self.logger.info("Data Fetch: Finished downloading uncorrected FLT data\n")
+
+        # Copy uncorrected FITS files to the main data directory.
+        cf.copy_files_check(self.ccd_dir, self.base_dir, files='*_flt.fits')
+
+        return
+
 
     def cleanup(self):
         
@@ -420,20 +476,18 @@ class CTI():
         if os.path.isdir(self.cache_dir):
             try:
                 shutil.rmtree(self.cache_dir)
-                print("\nDeleted CTI cache directories")
-            except Exception as ee:
-                print("\nWARNING: FAILED to deleted CTI cache directories at "\
-                      f"{self.cache_dir}")
-                print(ee)
+                self.logger.info("CTI correction: Deleted CTI cache directories")
+            except:
+                self.logger.exception("CTI correction: WARNING: FAILED to deleted CTI cache directories at "\
+                                      f"{self.cache_dir}")
         # Delete CTI data directories.
         if os.path.isdir(self.root_dir):
             try:
                 shutil.rmtree(self.root_dir)
-                print("Deleted CTI temporary data directories")
-            except Exception as ee:
-                print("\nWARNING: FAILED to deleted CTI temporary data "\
-                      f"directories at {self.root_dir}")
-                print(ee)
+                self.logger.info("CTI correction: Deleted CTI temporary data directories")
+            except:
+                self.logger.exception("CTI correction: WARNING: FAILED to deleted CTI temporary data "\
+                                      f"directories at {self.root_dir}")
         # # Delete CTI reference file directories.
         # if os.path.isdir(self.ref_dir):
         #     try:

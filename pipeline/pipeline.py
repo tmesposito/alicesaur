@@ -78,11 +78,25 @@ class Pipeline(object):
 
         self.pipelineStartTime = datetime.utcnow().strftime('%Y-%m-%dT%H-%M-%S')
 
+        self.pids = []
+
         # Define attributes with kwargs items
         for key, val in kwargs.items():
             setattr(self, key, val)
 
         if hasattr(self, 'dataDir'):
+            if self.dataDir is None:
+                # Invent a data directory from the target name,
+                # pid (if possible), instrument, and obsMode.
+                if len(self.pids) > 0:
+                    self.dataDir = os.path.join(os.path.realpath('.'),
+                                    f'{self.targ}_{self.instrument.lower()}_{self.pids[0]}',
+                                    self.obsMode.lower())
+                else:
+                    self.dataDir = os.path.join(os.path.realpath('.'),
+                                    f'{self.targ}_{self.instrument.lower()}',
+                                    self.obsMode.lower())
+
             # Ensure trailing slash in data directory name.
             self.dataDir = os.path.join(os.path.expanduser(self.dataDir),'')
         else:
@@ -96,7 +110,7 @@ class Pipeline(object):
             sys.exit(0)
 
         # Set up the logger for this pipeline.
-        self.setup_logger(startTime=self.pipelineStartTime, level='INFO')
+        self.set_up_logger(startTime=self.pipelineStartTime, level='INFO')
         self.logger.info(f"Using data directory {self.dataDir}")
 
         # Adjust custom identifier string to add underscore.
@@ -121,7 +135,7 @@ class Pipeline(object):
         self.alignStar = None
 
 
-    def setup_logger(self, startTime=None, level='INFO'):
+    def set_up_logger(self, startTime=None, level='INFO'):
         """
         Create a logging object.
 
@@ -287,7 +301,7 @@ class Pipeline(object):
         self.fileList = np.asarray(self.fileList, dtype='O')
 
         if len(self.fileList) == 0:
-            self.logger.error(f"*** NO FITS files found at {self.dataDir + '*_' + suffix +'.fits'} ** !!\n")
+            self.logger.warning(f"*** NO FITS files found at {self.dataDir + '*_' + suffix +'.fits'} *** !!\n")
 
         return
 
@@ -1472,31 +1486,41 @@ class Pipeline(object):
                       "CTI correction. Use main_reduce_stis.py --pids [#####]"\
                       " if you want to fetch MAST data for CTI correction.\n")
             else:
+                self.logger.info("Start data fetching and CTI correction step")
                 # Create CTI object instance; set up directories and environment.
-                stisCTI = CTI(obsMode=self.obsMode)
+                stisCTI = CTI(obsMode=self.obsMode,
+                              loggerName=self.logger.name)
                 stisCTI.setup_directories(base_dir=self.dataDir)
                 stisCTI.setup_env()
 
                 # Do the CTI correction.
-                stisCTI.run_cti(self.pids, target_name=self.targ, clean=True)
+                cti_success = stisCTI.run_cti(self.pids, target_name=self.targ,
+                                              clean=True)
 
-                # Update the inputType.
-                if self.inputType == 'flt':
-                    newSuffix = 'flc'
-                elif self.inputType == 'xft':
-                    newSuffix = 'xfc'
-                elif self.inputType == 'axt':
-                    newSuffix = 'axc'
-                elif self.inputType == 'sx2':
-                    newSuffix = 's2c'
+                if cti_success:
+                    # Update the inputType.
+                    if self.inputType == 'flt':
+                        newSuffix = 'flc'
+                    elif self.inputType == 'xft':
+                        newSuffix = 'xfc'
+                    elif self.inputType == 'axt':
+                        newSuffix = 'axc'
+                    elif self.inputType == 'sx2':
+                        newSuffix = 's2c'
+                    else:
+                        newSuffix = 'idk'
+
+                    if self.inputType in ['flt', 'xft', 'axt', 'sx2']:
+                        self.inputType = newSuffix
                 else:
-                    newSuffix = 'idk'
+                    self.logger.error("CTI correction unsuccessful. Downloading uncorrected flt files instead.")
+                    stisCTI.download_without_cti(self.pids, target_name=self.targ,
+                                                 clean=True)
 
-                if self.inputType in ['flt', 'xft', 'axt', 'sx2']:
-                    self.inputType = newSuffix
-
-            # Update the image paths based on CTI correction.
+            # Update the image paths based on CTI correction outcome.
             self.find_imgs(suffix=self.inputType)
+
+            self.logger.info("Finished data fetching and CTI correction step")
 
 
     # ========== LOAD IMAGES ========== #
@@ -1601,22 +1625,31 @@ class Pipeline(object):
     # ========== DISTORTION CORRECTION ========== #
 
         if self.inputType in ['flt', 'flc']:
-            # Update file paths to new distortion-corrected fits files.
-            # Placeholder for the CTI correction.
-            if self.inputType == 'flt':
-                newSuffix = 'xft'
-            elif self.inputType == 'flc':
-                newSuffix = 'xfc'
-            x2dFileList = []
-            for ii in range(len(self.fileList)):
-                x2dPath = os.path.join(os.path.dirname(self.fileList[ii]),
-                                       os.path.basename(self.fileList[ii]).replace(self.inputType, newSuffix))
-                x2dFileList.append(x2dPath)
+            try:
+                # Update file paths to new distortion-corrected fits files.
+                # Placeholder for the CTI correction.
+                if self.inputType == 'flt':
+                    newSuffix = 'xft'
+                elif self.inputType == 'flc':
+                    newSuffix = 'xfc'
+                x2dFileList = []
+                for ii in range(len(self.fileList)):
+                    x2dPath = os.path.join(os.path.dirname(self.fileList[ii]),
+                                           os.path.basename(self.fileList[ii]).replace(self.inputType, newSuffix))
+                    x2dFileList.append(x2dPath)
 
-            # Correct images for distortion and write new x2d.fits files.
-            correct_distortion(self.fileList, outputPaths=x2dFileList,
-                               refDir=None, inst=self.instrument,
-                               overwrite=True)
+                # Correct images for distortion and write new x2d.fits files.
+                distortion_success_list = correct_distortion(self.fileList, outputPaths=x2dFileList,
+                                                             refDir=None, inst=self.instrument,
+                                                             overwrite=True)
+                if np.sum(distortion_success_list) == 0:
+                    self.logger.error('Distortion Correction: FAILED distortion correction on all images! Proceeding without it.')
+                    newSuffix = self.inputType
+                    x2dFileList = self.fileList
+            except:
+                self.logger.exception('Distortion Correction: FAILED distortion correction! Proceeding without it.')
+                newSuffix = self.inputType
+                x2dFileList = self.fileList
 
             self.inputType = newSuffix
             self.fileList = np.asarray(x2dFileList, dtype='O')
@@ -1791,7 +1824,7 @@ class Pipeline(object):
         # Combine CRSPLITS into one "integrated" image per FITS.
 # FIX ME!!! Should maybe base the logic here on the dimensions of the input
 # files rather than their suffixes.
-        if self.inputType in ['flt', 'flc', 'alt', 'alc', 'axt', 'axc']:
+        if self.inputType in ['flt', 'flc', 'alt', 'aft', 'alc', 'axt', 'axc']:
             self.logger.info("COMBINING CRSPLITS into unified images...")
             yy, xx = np.ogrid[:sci_data[0].shape[1], :sci_data[0].shape[2]]
             for ii in tqdm(range(sci_data.shape[0]), desc="Images being unified"):
