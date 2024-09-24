@@ -1375,7 +1375,11 @@ class Pipeline(object):
         except:
             newPriHdr.add_comment('PSF-subtraction scale factors for reference images by science image: ' \
                                    + str(self.refScaleFactors).replace('\n', ''))
-        newPriHdr.add_comment(f'Constituent image exposure times (s): {self.exptimes_s}')
+        try:
+            newPriHdr.add_comment('Constituent image exposure times (s): ' \
+                                  + str(str(self.exptimes_s).replace('\n', '')))
+        except:
+            newPriHdr.add_comment('Failed to comment on constituent image exposure times.')
 
         if np.array(data).ndim > 3:
             # Create headers for all data extensions.
