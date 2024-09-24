@@ -459,13 +459,15 @@ class CTI():
         self.ccd_oids, products, obs = self.get_oids(pids, target_name=target_name)
 
         # Download data.
+        check_mkdir(self.cache_dir)
         # Choices for product_types: 'RAW', 'FLT', 'CRJ', 'EPC', 'SPT', 'ASN', 'SX2'
-        self.download_data(self.ccd_oids, self.ccd_dir, product_types={'FLT'},
-                           download_mode='science')
+        self.download_data(self.ccd_oids, destination=self.base_dir,
+                           cache_dir=self.cache_dir,
+                           product_types={'FLT'}, download_mode='science')
         self.logger.info("Data Fetch: Finished downloading uncorrected FLT data\n")
 
-        # Copy uncorrected FITS files to the main data directory.
-        cf.copy_files_check(self.ccd_dir, self.base_dir, files='*_flt.fits')
+        if clean:
+            self.cleanup()
 
         return
 
