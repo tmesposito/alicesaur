@@ -237,7 +237,10 @@ class Pipeline(object):
         # Background sampling radius [pix]
         self.info[self.obsMode].setdefault('bgRadius', 40)
         # Diffraction spike mask width [pix]
-        self.info[self.obsMode].setdefault('spWidth', 5)
+        if 'bar' in self.obsMode.lower():
+            self.info[self.obsMode].setdefault('spWidth', 8)
+        else:
+            self.info[self.obsMode].setdefault('spWidth', 12)
         self.info[self.obsMode].setdefault('radProfSub',
                                            {"rMax": 200,
                                             "postCombine": True})
@@ -431,11 +434,13 @@ class Pipeline(object):
             for index in np.ndindex(dq_data.shape):
                 dq_binary[index] = f"{dq_data[index]:014b}"
             dq_bool_16 = np.zeros(dq_binary.shape, dtype=bool)
+            dq_bool_256 = dq_bool_16.copy()
             dq_bool_8192 = dq_bool_16.copy()
             for index in np.ndindex(dq_binary.shape):
                 # Binary string is read from the right, so -5th element in from the
                 # right is the 16 bit. 0th element is the 8192 bit.
                 dq_bool_16[index] = dq_binary[index][-5] == '1'
+                dq_bool_256[index] = dq_binary[index][-9] == '1'
                 dq_bool_8192[index] = dq_binary[index][0] == '1'
 
             self.logger.info(f"\nNumber of CRSPLITS per FITS: {[len(ii) for ii in sci_data]}")
@@ -443,9 +448,11 @@ class Pipeline(object):
             if dq_data.size > 0:
 
                 n_dq_16 = np.sum(np.sum(dq_bool_16, axis=3), axis=2)
+                n_dq_256 = np.sum(np.sum(dq_bool_256, axis=3), axis=2)
                 n_dq_8192 = np.sum(np.sum(dq_bool_8192, axis=3), axis=2)
 
                 self.logger.info(f"\nDQ 16 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_16}")
+                self.logger.info(f"\nDQ 256 pixels (saturated) by FITS (row) and CRSPLIT (column):\n{n_dq_256}")
                 self.logger.info(f"\nDQ 8192 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_8192}")
 
                 self.logger.info("DQ flag : total count in dataset")
@@ -453,12 +460,13 @@ class Pipeline(object):
                     self.logger.info(f"{int(flag, 2)} : {np.sum(dq_binary==flag)}")
         else:
             dq_bool_16 = np.zeros(dq_data.shape, dtype=bool)
+            dq_bool_256 = np.zeros(dq_data.shape, dtype=bool)
             dq_bool_8192 = np.zeros(dq_data.shape, dtype=bool)
 
         if scienceOnly:
             return sci_data, sci_headers, np.array(target_names)
         else:
-            return sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, all_headers, sci_headers, err_headers, dq_headers, np.array(target_names)
+            return sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, err_headers, dq_headers, np.array(target_names)
 
 
     def pixelfixing(self, data, dq_8192_mask=None, dq_masks=[],
@@ -743,17 +751,26 @@ class Pipeline(object):
 
         # Align and pad associated mask arrays as well.
         if commonMask is not None:
-            alignMasks = shift_pix_to_pix(commonMask, stars[ii],
+            alignMasks = shift_pix_to_pix(commonMask, np.mean(stars, axis=0),
                                           finalYX=self.alignStar,
                                           outputSize=matSize,
                                           order=1, fill=-1e4)
         else:
-            for ii in tqdm(range(len(masks)), desc="Align masks"):
-                alignMasks.append(shift_pix_to_pix(masks[ii], stars[ii],
-                                                   finalYX=self.alignStar,
-                                                   outputSize=matSize,
-                                                   order=1, fill=-1e4))
-            alignMasks = np.array(alignMasks)
+            alignMasks = np.zeros(imgs[ii][0].shape)
+
+        if len(masks) > 0:
+            # Loops over the mask type.
+            for jj in tqdm(range(len(masks)), desc="Align masks"):
+                crsplitMask = np.zeros(alignImgs[0].shape)
+                # Loop over the CRSPLITS.
+                for ii, msk in enumerate(masks[jj]):
+                    crsplitMask += shift_pix_to_pix(masks[jj][ii], stars[ii],
+                                                    finalYX=self.alignStar,
+                                                    outputSize=matSize,
+                                                    order=1, fill=-1e4)
+                # Collapse the masks across CRSPLITS to end up with one
+                # per FITS.
+                alignMasks += crsplitMask
 
         alignImgs = np.array(alignImgs)
 
@@ -1539,7 +1556,7 @@ class Pipeline(object):
             return
 
         if self.inputType in ['flt', 'flc', 'xft', 'xfc', 'axt', 'axc']:
-            sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, all_headers, sci_headers, \
+            sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, \
                 err_headers, dq_headers, targs = self.load_flt_imgs(self.fileList,
                                                                     plot_images=False,
                                                                     scienceOnly=False)
@@ -1570,6 +1587,7 @@ class Pipeline(object):
 # DQ=8192 flags (cosmic-ray rejection) are not fixed by default because they
 # are too agressive, including real sources like stars and diffraction spikes.
             fix_dq_16 = True
+            fix_dq_256 = True
             fix_dq_8192 = False
 
             if fix_dq_8192:
@@ -1603,8 +1621,11 @@ class Pipeline(object):
             self.logger.warning("*** Occulter masks are not implemented yet "\
                   "for instruments other than STIS!!!\n")
             occultMask = np.zeros(self.imgShape)
-        occultMask[occultMask < 0] = -1.e4
+        occultMask[occultMask < 0] = -1e4
 
+        # Mask the saturated pixels.
+        saturationMask = np.zeros(sci_data.shape)
+        saturationMask[dq_bool_256] = -1e4
 
  # FIX ME!!! Move most of this into the data loading method??
 
@@ -1674,7 +1695,7 @@ class Pipeline(object):
             # self.allHdrs = sci_headers
             # self.imgShape = np.array(sci_data[0][0].shape)
 
-            sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, all_headers, sci_headers, \
+            sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, \
                 err_headers, dq_headers, targs = self.load_flt_imgs(self.fileList,
                                                                     plot_images=False,
                                                                     scienceOnly=False)
@@ -1737,7 +1758,7 @@ class Pipeline(object):
                 #     sci_data[ii].pop(ind)
 
                 alignImgs, alignMasks = self.align_imgs(sci_data[ii],
-                                                    indImg=ii, masks=[],
+                                                    indImg=ii, masks=[saturationMask[ii]],
                                                     commonMask=occultMask,
                                                     pad=True,
                                                     starGuess=self.starFromWCS_list[ii],
