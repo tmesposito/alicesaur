@@ -23,6 +23,7 @@ import subprocess
 import numpy as np
 from tempfile import TemporaryDirectory
 from astropy.io import fits
+from astropy.table import vstack
 
 # STIS packages
 from stis_cti import stis_cti, archive_dark_query
@@ -180,6 +181,18 @@ class CTI():
             # Get the list of data products associated with the obs.
             products = Observations.get_product_list(obs)
 
+# FIX ME!!! Figure out how to log this table output nicely.
+            # Print the table of observations found.
+            print("\nObservations found:")
+            obs['intentType', 'target_name', 'target_classification', 't_min',
+                'obs_id', 't_exptime'].pprint(max_lines=100, max_width=200)
+
+            if len(obs) == 0:
+                self.logger.error("*** NO OBSERVATIONS FOUND in archive with" \
+                                  f" program ID {pid}. Check your program ID."\
+                                  " Aborting.")
+                return [], [], None
+
             # Separate out obs for only PSF reference stars.
             # First grab anything with both 'PSF' and the science target's name
             # in the obs target name.
@@ -201,6 +214,17 @@ class CTI():
                 obs_target = obs[obs['target_name'] == target_name]
                 # Get obs_id's for this target's images only.
                 oids_for_target = list(np.unique(obs_target['obs_id']))
+
+                # Abort if no observations found with the target name.
+                if len(obs_target) == 0:
+                    self.logger.error("*** NO OBSERVATIONS FOUND in archive with" \
+                                      f" program ID {pid} AND target name {target_name}."\
+                                      "Check both inputs before trying again."\
+                                      " Aborting.")
+                    unique_targets = list(np.unique(obs['target_name']))
+                    self.logger.info(f"Target names found for program ID {pid}: {unique_targets}")
+                    return [], [], None
+
                 t_start_target = min(obs_target['t_min'])
                 t_end_target = max(obs_target['t_max'])
 
@@ -208,10 +232,12 @@ class CTI():
                 # If none, look immediately before and after the target obs.
                 # Make sure to match the camera settings.
                 obs_calPSF_match = obs_calPSF[(obs_calPSF['t_min'] >= t_start_target) & (obs_calPSF['t_min'] <= t_end_target)]
-                self.logger.info(f"Data Fetch: Found {len(obs_calPSF_match)} PSF reference star images amid science images")
-                self.logger.info(f"Data Fetch: PSF reference stars found: {list(np.unique(obs_calPSF_match['target_name']))}")
+                self.logger.info(f"Data Fetch: Found {len(obs_calPSF_match)} clearly labeled PSF reference star image(s) amid science images")
+                if len(obs_calPSF_match) > 0:
+                    self.logger.info(f"Data Fetch: PSF reference stars found: {list(np.unique(obs_calPSF_match['target_name']))}")
                 # Get obs_id's for the PSF reference images.
                 oids_for_refs = list(np.unique(obs_calPSF_match['obs_id']))
+                obs_calPSF = vstack([obs_calPSF, obs_calPSF_match])
                 # Combine all target and ref oids into one list.
                 oids = oids_for_target
                 oids += oids_for_refs
@@ -228,8 +254,24 @@ class CTI():
                     ref_match = [ob in assumed_ref_names for ob in obs_amidst['target_name']]
                     obs_ref_match = obs_amidst[ref_match]
                     oids_for_refs_more = list(np.unique(obs_ref_match['obs_id']))
+                    oids_for_refs += oids_for_refs_more
                     oids += oids_for_refs_more
+                    obs_calPSF = vstack([obs_calPSF, obs_ref_match])
                     # obs_ref_match = obs_amidst[obs_amidst['target_name'] in ]
+                # If still no PSF references were identified, look immediately
+                # before and after science target images (within 3 hours).
+                if len(oids_for_refs) == 0:
+                    # Limit search to 3 hours before and after the science images.
+                    obs_adjacent = obs[((obs['t_min'] < t_start_target) & (obs['t_min'] >= t_start_target - 0.125))
+                                       | ((obs['t_min'] > t_end_target) & (obs['t_min'] <= t_end_target + 0.125))]
+                    unique_target_names = np.unique(obs_adjacent['target_name'])
+                    assumed_ref_names = unique_target_names[unique_target_names != target_name]
+                    ref_match = [ob in assumed_ref_names for ob in obs_adjacent['target_name']]
+                    obs_ref_match = obs_adjacent[ref_match]
+                    oids_for_refs_more = list(np.unique(obs_ref_match['obs_id']))
+                    oids_for_refs += oids_for_refs_more
+                    oids += oids_for_refs_more
+                    obs_calPSF = vstack([obs_calPSF, obs_ref_match])
                 # for oid in oids_for_target:
                 #     product_row = products[products['obs_id'] == oid]
                 #     # if product_row is not None:
@@ -237,6 +279,18 @@ class CTI():
                 # # oids += list(np.unique(products['obs_id']))
             else:
                 oids += list(np.unique(products['obs_id']))
+
+        self.logger.info(f"Data Fetch: Found {len(obs_calPSF)} total PSF reference star image(s) near science images")
+        if len(obs_calPSF) > 0:
+            self.logger.info(f"Data Fetch: PSF reference stars found: {list(np.unique(obs_calPSF['target_name']))}")
+
+# FIX ME!!! Figure out how to log this table output nicely.
+        # Print the table of observations found.
+        print("\nPSF reference images:")
+        obs_calPSF['intentType', 'target_name', 'target_classification',
+                   't_min', 'obs_id', 't_exptime'].pprint(max_lines=100,
+                                                          max_width=200)
+        print("\n")
 
         # Weed out duplicate oids.
         oids = np.unique(oids).tolist()
@@ -342,6 +396,10 @@ class CTI():
         # Get the obs_id values from the PIDs.
         self.pids = pids
         self.ccd_oids, products, obs = self.get_oids(pids, target_name=target_name)
+
+        # Abandon CTI correction if no matching observations were found.
+        if len(self.ccd_oids) == 0:
+            return False
 
         # Download data.
         # Choices for product_types: 'RAW', 'FLT', 'CRJ', 'EPC', 'SPT', 'ASN', 'SX2'
@@ -457,6 +515,10 @@ class CTI():
         # Get the obs_id values from the PIDs.
         self.pids = pids
         self.ccd_oids, products, obs = self.get_oids(pids, target_name=target_name)
+
+        # Abandon CTI correction if no matching observations were found.
+        if len(self.ccd_oids) == 0:
+            return False
 
         # Download data.
         check_mkdir(self.cache_dir)

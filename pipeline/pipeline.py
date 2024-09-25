@@ -1534,11 +1534,20 @@ class Pipeline(object):
         self.logger.info("LOADING DATA...")
         imgsHdrs, targs = self.load_imgs(suffix=self.inputType)
 
+        if (self.inputType in ['sx2']) and (len(imgsHdrs[0]) == 0):
+            self.logger.error("*** NO IMAGES LOADED. Aborting.")
+            return
+
         if self.inputType in ['flt', 'flc', 'xft', 'xfc', 'axt', 'axc']:
             sci_data, err_data, dq_data, dq_bool_16, dq_bool_8192, all_headers, sci_headers, \
                 err_headers, dq_headers, targs = self.load_flt_imgs(self.fileList,
                                                                     plot_images=False,
                                                                     scienceOnly=False)
+            # Exit if no images were loaded.
+            if len(sci_data) == 0:
+                self.logger.error("*** NO IMAGES WERE LOADED. Aborting.")
+                return
+
             self.allHdrs = all_headers
             self.imgShape = np.array(sci_data[0][0].shape)
             try:
