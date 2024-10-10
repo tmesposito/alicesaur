@@ -413,7 +413,7 @@ def subtract_bg(im, cen, size):
     return imSub, bg
 
 
-def randomly_sample_bg(im, excludeYX=[], bgRadius=30, exclusionRadius=200,
+def randomly_sample_bg(im, excludeYX=[], bgRadius=30, exclusionRadius=300,
                        mask=None):
     """
 
@@ -445,10 +445,14 @@ def randomly_sample_bg(im, excludeYX=[], bgRadius=30, exclusionRadius=200,
     for exYX in excludeYX:
         radii = make_radii(im, exYX)
         imMasked[radii <= exclusionRadius] = np.nan
+    # Also mask all pixels that are very close to zero, e.g., to help with
+    # subarrayed images that are mostly empty.
+    imMasked[np.abs(imMasked) < 1e-9] = np.nan
+
     whGood = np.where(~np.isnan(imMasked))
     yRange = (int(min(whGood[0]) + bgRadius), int(max(whGood[0]) - bgRadius))
     xRange = (int(min(whGood[1]) + bgRadius), int(max(whGood[1]) - bgRadius))
-    sampleYs = np.arange(yRange[0], yRange[1], int(2*bgRadius))
+    sampleYs = np.arange(yRange[0], yRange[1], int(0.25*bgRadius))
     sampleYXs = zip(sampleYs, np.linspace(xRange[0], xRange[1], len(sampleYs),
                                           dtype=int))
     goodYXs = []
