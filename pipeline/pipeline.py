@@ -371,6 +371,9 @@ class Pipeline(object):
                     elif 'DQ' in hdu.header.get('EXTNAME', ''):
                         crsplits_dq.append(hdu.data)
                         crsplits_hdrs_dq.append(hdu.header)
+                    elif 'DUMMY' in hdu.header.get('EXTNAME', ''):
+                        crsplits_dq.append(hdu.data)
+                        crsplits_hdrs_dq.append(hdu.header)
                     elif hdu.header.get('EXTNAME', None) is None:
                         base_header = hdu.header.copy()
                         crsplits_hdrs_sci.append(base_header)
@@ -392,67 +395,97 @@ class Pipeline(object):
             err_headers.append(crsplits_hdrs_err)
             dq_headers.append(crsplits_hdrs_dq)
 
+        self.logger.info(f"Number of CRSPLITS per FITS: {[len(ii) for ii in sci_data]}")
+
         # Check if all images have the same number of CRSPLITS.
         n_crsplits = np.array([len(ii) for ii in sci_data])
         if len(np.unique(n_crsplits)) > 1:
-            self.logger.warning("WARNING: Uneven numbers of CRSPLITS among input images:" \
-                                f"{n_crsplits}\n")
-            # max_crsplits = max(n_crsplits)
-        #     print(f"Inserting empty CRSPLITS to reach {max_crsplits} for all")
-        #     for ii, ncr in enumerate(n_crsplits):
-        #         if ncr < max_crsplits:
-        #             sci_data[ii].append(np.nan*np.ones(sci_data[ii][0].shape))
-        #             err_data[ii].append(np.nan*np.ones(err_data[ii][0].shape))
-        #             dq_data[ii].append(np.nan*np.ones(dq_data[ii][0].shape))
-        #             # for jj in range(3):
-        #             #     all_headers.append({'EXTNAME':'EMPTY'})
-        #             sci_headers[ii].append({'EXTNAME':'EMPTY'})
-        #             err_headers[ii].append({'EXTNAME':'EMPTY'})
-        #             dq_headers[ii].append({'EXTNAME':'EMPTY'})
-            min_crsplits = min(n_crsplits)
-            self.logger.info(f"Trimming extra CRSPLITS to reach {min_crsplits} for all")
+            self.logger.warning("Uneven numbers of CRSPLITS among input " \
+                                f"images: {n_crsplits}\n")
+            max_crsplits = max(n_crsplits)
+            self.logger.warning(f"Inserting empty CRSPLITS to reach {max_crsplits} as needed")
             for ii, ncr in enumerate(n_crsplits):
-                if ncr > min_crsplits:
-                    sci_data[ii] = sci_data[ii][:min_crsplits]
-                    err_data[ii] = err_data[ii][:min_crsplits]
-                    dq_data[ii] = dq_data[ii][:min_crsplits]
-                    all_headers[ii] = all_headers[ii][:3*min_crsplits+1]
-                    sci_headers[ii] = sci_headers[ii][:min_crsplits+1]
-                    err_headers[ii] = err_headers[ii][:min_crsplits]
-                    dq_headers[ii] = dq_headers[ii][:min_crsplits]
+                if ncr < max_crsplits:
+                    for jj in range(0, max_crsplits - ncr):
+                        sci_data[ii].append(np.nan*np.ones(sci_data[ii][0].shape))
+                        if len(err_data[ii]) > 0:
+                            err_data[ii].append(np.nan*np.ones(err_data[ii][0].shape))
+                        if len(dq_data[ii]) > 0:
+                            dq_data[ii].append(np.zeros(dq_data[ii][0].shape, dtype=int))
+                        # for jj in range(3):
+                        #     all_headers.append({'EXTNAME':'EMPTY'})
+                        sci_headers[ii].append({'EXTNAME':'DUMMY'})
+                        if len(err_headers[ii]) > 0:
+                            err_headers[ii].append({'EXTNAME':'DUMMY'})
+                        if len(dq_headers[ii]) > 0:
+                            dq_headers[ii].append({'EXTNAME':'DUMMY'})
+
+# # FIX ME!!! This trims the cubes to all have the minimum number of CRSPLITS
+# # found in the input images. It throws away integration time as a result.
+# # Find a better way.
+#             min_crsplits = min(n_crsplits)
+#             self.logger.warning(f"Trimming extra CRSPLITS to reach {min_crsplits} as needed")
+#             for ii, ncr in enumerate(n_crsplits):
+#                 if ncr > min_crsplits:
+#                     sci_data[ii] = sci_data[ii][:min_crsplits]
+#                     err_data[ii] = err_data[ii][:min_crsplits]
+#                     dq_data[ii] = dq_data[ii][:min_crsplits]
+#                     all_headers[ii] = all_headers[ii][:3*min_crsplits+1]
+#                     sci_headers[ii] = sci_headers[ii][:min_crsplits+1]
+#                     err_headers[ii] = err_headers[ii][:min_crsplits]
+#                     dq_headers[ii] = dq_headers[ii][:min_crsplits]
 
         sci_data = np.array(sci_data)
         err_data = np.array(err_data)
         dq_data = np.array(dq_data)
 
-        # Convert DQ values to binary strings to read the individual flags.
-        # Only do this if bad pixels are going to be fixed.
-        if not self.noFixPix:
-            self.logger.info("Reading DQ array binary flags...")
+        if (not self.noMaskSaturation) | (not self.noFixPix):
+            self.logger.info("Converting DQ arrays to binary...")
             dq_binary = np.empty(dq_data.shape, dtype='U14')
 
+            # Convert the DQ array integers to binary strings.
+            # Do this only once, because it's slow.
             for index in np.ndindex(dq_data.shape):
                 dq_binary[index] = f"{dq_data[index]:014b}"
+
+        # Convert DQ values to binary strings to read the individual flags.
+        # Only get saturated pixels if they are going to be fixed.
+        if not self.noMaskSaturation:
+            self.logger.info("Reading DQ array binary flags for saturation...")
+            dq_bool_256 = np.zeros(dq_binary.shape, dtype=bool)
+            for index in np.ndindex(dq_binary.shape):
+                # Binary string is read from the right, so -9th element in from
+                # the right is the 256 bit. 0th element is the 8192 bit.
+                dq_bool_256[index] = dq_binary[index][-9] == '1'
+
+            if dq_data.size > 0:
+                n_dq_256 = np.sum(np.sum(dq_bool_256, axis=3), axis=2)
+                self.logger.info(f"\nDQ 256 pixels (saturated) by FITS (row) and CRSPLIT (column):\n{n_dq_256}")
+
+                self.logger.info("DQ flag : total count in dataset")
+                for flag in np.unique(dq_binary):
+                    self.logger.info(f"{int(flag, 2)} : {np.sum(dq_binary==flag)}")
+        else:
+            dq_bool_256 = np.zeros(dq_data.shape, dtype=bool)
+
+        # Only get bad pixels if they are going to be fixed.
+        if not self.noFixPix:
+            self.logger.info("Reading DQ array binary flags for bad pixels...")
+
             dq_bool_16 = np.zeros(dq_binary.shape, dtype=bool)
-            dq_bool_256 = dq_bool_16.copy()
             dq_bool_8192 = dq_bool_16.copy()
             for index in np.ndindex(dq_binary.shape):
                 # Binary string is read from the right, so -5th element in from the
                 # right is the 16 bit. 0th element is the 8192 bit.
                 dq_bool_16[index] = dq_binary[index][-5] == '1'
-                dq_bool_256[index] = dq_binary[index][-9] == '1'
                 dq_bool_8192[index] = dq_binary[index][0] == '1'
-
-            self.logger.info(f"\nNumber of CRSPLITS per FITS: {[len(ii) for ii in sci_data]}")
 
             if dq_data.size > 0:
 
                 n_dq_16 = np.sum(np.sum(dq_bool_16, axis=3), axis=2)
-                n_dq_256 = np.sum(np.sum(dq_bool_256, axis=3), axis=2)
                 n_dq_8192 = np.sum(np.sum(dq_bool_8192, axis=3), axis=2)
 
                 self.logger.info(f"\nDQ 16 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_16}")
-                self.logger.info(f"\nDQ 256 pixels (saturated) by FITS (row) and CRSPLIT (column):\n{n_dq_256}")
                 self.logger.info(f"\nDQ 8192 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_8192}")
 
                 self.logger.info("DQ flag : total count in dataset")
@@ -460,7 +493,6 @@ class Pipeline(object):
                     self.logger.info(f"{int(flag, 2)} : {np.sum(dq_binary==flag)}")
         else:
             dq_bool_16 = np.zeros(dq_data.shape, dtype=bool)
-            dq_bool_256 = np.zeros(dq_data.shape, dtype=bool)
             dq_bool_8192 = np.zeros(dq_data.shape, dtype=bool)
 
         if scienceOnly:
@@ -704,9 +736,12 @@ class Pipeline(object):
             # sp_width = 30 pix generally good for bar10
             if self.noRadon or self.forceStar:
                 stars.append(self.starFromWCS)
-                self.logger.warning("Assuming all stars at {}\n".format(self.starFromWCS))
+                self.logger.warning(f"Assuming all stars at {self.starFromWCS}\n")
+            elif np.all(np.isnan(im)):
+                stars.append(np.array([np.nan, np.nan]))
+                self.logger.info("All NaN image; no star position found\n")
             else:
-                self.logger.info("Radon transforming image {}...".format(ii))
+                self.logger.info(f"Radon transforming image {ii}...")
                 stars.append(find_star_radon(imgIter,
                                     starGuess,
                                     self.spikeAngles, IWA=self.radonIWA,
@@ -733,7 +768,7 @@ class Pipeline(object):
             if finalStarYX is not None:
                 alignStar = np.array(finalStarYX)
             else:
-                alignStar = np.round(np.mean(stars, axis=0))
+                alignStar = np.round(np.nanmean(stars, axis=0))
 
 # FIX ME!!! Might be bad to redefine alignStar here.
         self.alignStar = alignStar
@@ -751,7 +786,7 @@ class Pipeline(object):
 
         # Align and pad associated mask arrays as well.
         if commonMask is not None:
-            alignMasks = shift_pix_to_pix(commonMask, np.mean(stars, axis=0),
+            alignMasks = shift_pix_to_pix(commonMask, np.nanmean(stars, axis=0),
                                           finalYX=self.alignStar,
                                           outputSize=matSize,
                                           order=1, fill=-1e4)
@@ -764,10 +799,12 @@ class Pipeline(object):
                 crsplitMask = np.zeros(alignImgs[0].shape)
                 # Loop over the CRSPLITS.
                 for ii, msk in enumerate(masks[jj]):
-                    crsplitMask += shift_pix_to_pix(masks[jj][ii], stars[ii],
-                                                    finalYX=self.alignStar,
-                                                    outputSize=matSize,
-                                                    order=1, fill=-1e4)
+                    # Skip CRSPLITS with no star measurement (can't shift it).
+                    if np.all(np.isfinite(stars[ii])):
+                        crsplitMask += shift_pix_to_pix(masks[jj][ii], stars[ii],
+                                                        finalYX=self.alignStar,
+                                                        outputSize=matSize,
+                                                        order=1, fill=-1e4)
                 # Collapse the masks across CRSPLITS to end up with one
                 # per FITS.
                 alignMasks += crsplitMask
@@ -829,6 +866,9 @@ class Pipeline(object):
 
                 if self.workingImgs.ndim > 3:
                     for jj in range(self.workingImgs.shape[1]):
+                        if np.all(np.isnan(im[jj])):
+                            bgs.append(np.nan)
+                            continue
                         # Work on a source-masked copy of the aligned image.
                         imSub, bg = utils.subtract_bg(im[jj].copy(), bgCenRot, self.bgRadius)
                         # Can't use subtract_bg image output here because it is masked.
@@ -844,11 +884,14 @@ class Pipeline(object):
             else:
                 if self.workingImgs.ndim > 3:
                     for jj in range(self.workingImgs.shape[1]):
+                        if np.all(np.isnan(im[jj])):
+                            bgs.append(np.nan)
+                            continue
                         # Work on a source-masked copy of the aligned image.
                         bg = utils.randomly_sample_bg(im[jj].copy(),
                                                  excludeYX=[self.stars[ii]],
                                                  bgRadius=40,
-                                                 exclusionRadius=200,
+                                                 exclusionRadius=300,
                                                  mask=self.alignMasks[ii].astype(bool))
                         bgs.append(bg)
                         self.workingImgs[ii][jj] = im[jj] - bg
@@ -954,8 +997,10 @@ class Pipeline(object):
                     for ii in range(len(newData)):
                         # if not np.all(np.isnan(newData[ii])):
                         if ii >= len(sciInds):
-                            for jj in range(3):
-                                hdul.append(fits.ImageHDU(data=newData[ii].astype(np.float32)))
+                            # Don't save DUMMY extensions to file.
+                            continue
+                            # for jj in range(3):
+                            #     hdul.append(fits.ImageHDU(data=newData[ii].astype(np.float32)))
                         else:
                             hdul[sciInds[ii]].data = newData[ii].astype(np.float32)
 
@@ -1133,8 +1178,8 @@ class Pipeline(object):
                 hdu.header['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
                 hdu.header['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
                 if ii >= 1:
-                    hdu.header['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded pre-alignment star center Y')
-                    hdu.header['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded pre-alignment star center X')
+                    hdu.header['ORIGCENY'] = (np.nanmean(self.starsOriginal, axis=0)[0], 'Un-padded pre-alignment star center Y')
+                    hdu.header['ORIGCENX'] = (np.nanmean(self.starsOriginal, axis=0)[1], 'Un-padded pre-alignment star center X')
                     # n_sci += 1
                 if 'x' in self.inputType:
                     hdu.header['DISTCORR'] = (True, 'Distortion corrected images?')
@@ -1326,8 +1371,8 @@ class Pipeline(object):
         newPriHdr['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
         newPriHdr['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
         newPriHdr['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
-        newPriHdr['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
-        newPriHdr['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
+        newPriHdr['ORIGCENY'] = (np.nanmean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
+        newPriHdr['ORIGCENX'] = (np.nanmean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
         newPriHdr['TEXPTIME'] = (np.sum(self.exptimes_s), 'Total combined integration time in s')
         newPriHdr['BUNIT'] = (self.bunit, 'brightness units')
         newPriHdr['PHOTFLAM'] = (self.photflam_avg, 'inverse sensitivity, ergs/s/cm2/Ang per count/s')
@@ -1493,6 +1538,17 @@ class Pipeline(object):
         # Find image filepaths in self.dataDir.
         self.find_imgs(suffix=self.inputType)
 
+# FIX ME!!! Turn these hard-coded DQ fixing flags into input options.
+# DQ=8192 flags (cosmic-ray rejection) are not fixed by default because they
+# are too agressive, including real sources like stars and diffraction spikes.
+        # CALSTIS "hot" pixel flag (>5 sigma above median dark level)
+        self.fix_dq_16 = True
+        # Saturation/non-linearity flag.
+        self.fix_dq_256 = True
+        # Cosmic ray rejection flag.
+        self.fix_dq_8192 = False
+
+
     # ========== CHARGE TRANSFER INEFFICIENCY CORRECTION ========== #
 
         if not self.noFixCTI:
@@ -1581,23 +1637,17 @@ class Pipeline(object):
                           "aligned.\n")
                 self.alignStar = None
 
+
     # ========== BAD PIXEL FIXING ========== #
 
-# FIX ME!!! Turn these hard-coded DQ fixing flags into input options.
-# DQ=8192 flags (cosmic-ray rejection) are not fixed by default because they
-# are too agressive, including real sources like stars and diffraction spikes.
-            fix_dq_16 = True
-            fix_dq_256 = True
-            fix_dq_8192 = False
-
-            if fix_dq_8192:
+            if self.fix_dq_8192:
                 dq_8192_mask = dq_bool_8192
             else:
                 dq_8192_mask = None
 
             # Fix bad pixels based on data quality flags from FITS.
             if not self.noFixPix:
-                if fix_dq_16:
+                if self.fix_dq_16:
                     sci_data = self.pixelfixing(sci_data,
                                                 dq_8192_mask=dq_8192_mask,
                                                 dq_masks=[dq_bool_16],
@@ -1607,7 +1657,6 @@ class Pipeline(object):
                                                 dq_8192_mask=dq_8192_mask,
                                                 dq_masks=[],
                                                 fix_other=True, verbose=True)
-
                 # Overwrite input FITS cube with the pixel-fixed CRSPLIT images.
                 for ii, fp in enumerate(self.fileList):
                     self.update_fits(fp, newData=sci_data[ii],
@@ -1702,6 +1751,11 @@ class Pipeline(object):
             self.allHdrs = all_headers
             self.imgShape = np.array(sci_data[0][0].shape)
 
+# # TEMP!!! Update saturation masks after distortion correction?
+#             # Mask the saturated pixels.
+#             saturationMask = np.zeros(sci_data.shape)
+#             saturationMask[dq_bool_256] = -1e4
+
 
     # ========== IMAGE ALIGNMENT (REGISTRATION) ========== #
 
@@ -1718,9 +1772,12 @@ class Pipeline(object):
                     targDec = priHdr['DEC_TARG']
                     starFromWCS_flt = []
                     for jj, hdr in enumerate(sci_headers[ii][1:]):
+                        if np.all(np.isnan(sci_data[ii][jj])):
+                            starFromWCS_flt.append(np.array([np.nan, np.nan]))
+                            continue
                         ww = wcs.WCS(hdr)
                         starFromWCS_flt.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
-                    self.starFromWCS_list.append(np.mean(starFromWCS_flt, axis=0))
+                    self.starFromWCS_list.append(np.nanmean(starFromWCS_flt, axis=0))
             else:
                 for ii, hdr in enumerate(imgsHdrs[1]):
                     # Get estimate of star position from target RA/Dec and WCS in header.
@@ -1728,7 +1785,7 @@ class Pipeline(object):
                     targRA = hdr[0]['RA_TARG']
                     targDec = hdr[0]['DEC_TARG']
                     self.starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
-            self.starFromWCS = np.mean(self.starFromWCS_list, axis=0)
+            self.starFromWCS = np.nanmean(self.starFromWCS_list, axis=0)
 
 # FIX ME!!! The following alignment only aligns the SCI extensions of the
 # FITS cubes. This means the ERR and DQ arrays become out of alignment with
@@ -1805,9 +1862,10 @@ class Pipeline(object):
 # FIX ME!!! Convert all alignMasks to self.alignMasks.
             alignMasks = np.array(alignMasksAll)
             self.alignMasks = alignMasks
+
             self.stars = np.mean(self.starsAll, axis=1)
-            self.starsOriginal = np.mean(self.starsOriginalAll, axis=1)
-            self.alignStarOffsets = np.mean(self.alignStarOffsetsAll, axis=1)
+            self.starsOriginal = np.nanmean(self.starsOriginalAll, axis=1)
+            self.alignStarOffsets = np.nanmean(self.alignStarOffsetsAll, axis=1)
 
             self.inputType = newSuffix
 
@@ -1840,7 +1898,8 @@ class Pipeline(object):
             self.alignMasks = alignMasks
 
 
-    # ==== BACKGROUND SUBTRACTION ==== #
+    # ========== BACKGROUND SUBTRACTION ========== #
+
         # Subtract background/sky. If bgCen is not given by the info.json,
         # then a multi-region sampling of the background is performed and the
         # median of all background samples is subtracted from the image.
@@ -1862,22 +1921,19 @@ class Pipeline(object):
             self.logger.info("COMBINING CRSPLITS into unified images...")
             yy, xx = np.ogrid[:sci_data[0].shape[1], :sci_data[0].shape[2]]
             for ii in tqdm(range(sci_data.shape[0]), desc="Images being unified"):
-                # # Clip highest valued pixel in every CRSPLIT stack.
-                # # WARNING: This distorts the bg star shapes -- don't like it
-                # sci_data[ii][np.argmax(sci_data[ii], axis=0), yy, xx] = np.nan
-                # Sigma clip pixels more than 5-sigma discrepant in every CRSPLIT stack.
-                # No pixels actually crossed the 5-sigma threshold in the first
-                # dataset tested (HD 114082 flt wedge).
-                # std = np.nanstd(sci_data[ii], axis=0)
-                # nsigma = np.abs((sci_data[ii] - np.nanmedian(sci_data[ii], axis=0))/std)
-                # median absolute deviation = the median over the absolute
-                # deviations from the median (ignoring NaN)
-                mad = median_abs_deviation(sci_data[ii], axis=0,
+                # Throw away CRSPLITS that are all NaN.
+                wh_all_nan = np.all(np.isnan(sci_data[ii]), axis=(2,1))
+                crsplits_to_keep = ~wh_all_nan
+                # Clip pixels more than 5-MAD discrepant in every CRSPLIT stack.
+                # MAD = median absolute deviation = the median over the
+                # absolute deviations from the median (ignoring NaN)
+                # Remove all-NaN CRSPLITS before computing MAD to save time.
+                mad = median_abs_deviation(sci_data[ii][crsplits_to_keep], axis=0,
                                            nan_policy='omit')
+                # Mask pixels more than 5 MAD from the median.
                 nmad = np.abs((sci_data[ii] - np.nanmedian(sci_data[ii], axis=0))/mad)
-                # sci_data[ii][np.where(nsigma > 5), yy, xx] = np.nan
-                # sci_data[ii][nsigma > 5] = np.nan
                 sci_data[ii][nmad > 5] = np.nan
+
             # Get an array of the number of CRSPLITS per image.
             n_crsplits = np.array([hdr[0].get('CRSPLIT') for hdr in sci_headers])
             # Average together the CRSPLITS.
@@ -1891,7 +1947,9 @@ class Pipeline(object):
                 imgsHdrs[0].append([None, unifiedImgs[ii]])
                 imgsHdrs[1].append(sci_headers[ii][:2])
 
-            del unifiedImgs # don't need this anymore
+            # Don't need these anymore.
+            del unifiedImgs
+            del sci_data
 
         # Zero-pad images to uniform dimensions, depending on instrument.
         if self.instrument == 'stis':
@@ -1999,7 +2057,6 @@ class Pipeline(object):
             # psfSubMasks[ind][radii >= sub_r_out] = np.nan
             # psfSubMasks[ind][radii < sub_r_in] = np.nan
             # psfSubMasks[ind] += sourceMasks[ind]
-            # breakpoint()
 
     # # TEMP!!! TEST ONLY PSF SUBTRACTING BASED ON DIFFRACTION SPIKES.
             if psfsubOnSpikesOnly:
@@ -2365,7 +2422,10 @@ class Pipeline(object):
                 meanRadProf = stis_psfsub.measure_mean_radial_prof(tmpImg, self.alignStar,
                                                        paList=info[obsMode]['radProfSub']['paList'],
                                                        paHW=info[obsMode]['radProfSub']['paHW'],
-                                                       rMax=info[obsMode]['radProfSub']['rMax'])
+                                                       rMax=info[obsMode]['radProfSub']['rMax'],
+                                                       interpInf=False,
+                                                       smooth=True,
+                                                       mode='median')
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 # Keep the "pure" final image pure (no radial profile
                 # subtraction at all), still defined as finalImg.

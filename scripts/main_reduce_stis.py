@@ -91,6 +91,11 @@ if __name__ == "__main__":
     parser.add_argument('--noFixPix', dest="noFixPix",
                         action="store_true", help=desc)
 
+    desc = 'Use --noMaskSaturation to NOT mask saturated pixels in each '\
+        'individual image when doing PSF subtraction and final image collapse.'
+    parser.add_argument('--noMaskSaturation', dest="noMaskSaturation",
+                        action="store_true", help=desc)
+
     desc = 'Use --noRadon to NOT do radon star centering on each image.'
     parser.add_argument('--noRadon', dest="noRadon",
                         action="store_true", help=desc)
