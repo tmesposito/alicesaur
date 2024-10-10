@@ -9,6 +9,7 @@ import os
 import shutil
 from distutils import spawn
 import numpy as np
+from astropy.io import fits
 # from drizzlepac import astrodrizzle
 # from drizzlepac.stisData import STISInputImage
 from stistools.x2d import x2d
@@ -142,6 +143,22 @@ def undistort_single_image(imgPath, outputPath="", overwrite=False):
     elif x2d_status > 2:
         print("\nWARNING! Something unknown went wrong during distortion"\
               "correction.\n")
+
+    # For subarrayed images, remove the zero-padding from top & right edges of
+    # images created by cs7.e. Otherwise, we get strips of zeros in our
+    # derotated cubes. It seems to be a constant 38 pixels on all edges.
+    # Bottom and left edges need to be kept to match the occulter mask.
+    padY = 38
+    padX = 38
+    with fits.open(outputPath, mode='update') as hdul:
+        shape = hdul[1].data.shape
+        if (shape[0] < 1100) | (shape[1] < 1100):
+            for ii in range(1, len(hdul)):
+                shape = hdul[ii].data.shape
+                hdul[ii].data = hdul[ii].data[:shape[0] - padY,
+                                              :shape[1] - padX]
+        print("Subarrayed image detected: trimmed zero-padding off of the "\
+              f" distortion-corrected arrays top edge (y={padY},x={padX} pix).")
 
     # Delete backup or move backup back to original depending on success.
     if x2d_status == 0:
