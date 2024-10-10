@@ -610,7 +610,10 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                     subImgMasked[radProfMasks[ii]] = np.nan
                 meanRadProf = measure_mean_radial_prof(subImgMasked, sciStar,
                                         paList=radProfPaList - orientats[ii],
-                                        paHW=radProfPaHW, rMax=radProfMax)
+                                        paHW=radProfPaHW, rMax=radProfMax,
+                                        interpInf=False,
+                                        smooth=True,
+                                        mode='median')
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 subImgs_subRadProf.append(subImg - meanRadProf)
                 print("\nSubtracted mean radial profile after main "\
