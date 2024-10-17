@@ -73,7 +73,7 @@ def find_observations(pids, instrument_name='STIS/CCD', filters='MIRVIS',
                                           dataproduct_type=dataproduct_type,
                                           calib_level=calib_level)
 
-        if len(obs <= 0):
+        if len(obs) <= 0:
             if verbose: print(f"No observations found for pid {pid}")
             continue
         else:
