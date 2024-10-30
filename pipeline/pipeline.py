@@ -1549,7 +1549,7 @@ class Pipeline(object):
         self.fix_dq_8192 = False
 
 
-    # ========== CHARGE TRANSFER INEFFICIENCY CORRECTION ========== #
+    # ======= DATA FETCHING & CHARGE TRANSFER INEFFICIENCY CORRECTION ======= #
 
         if not self.noFixCTI:
 
@@ -1751,10 +1751,9 @@ class Pipeline(object):
             self.allHdrs = all_headers
             self.imgShape = np.array(sci_data[0][0].shape)
 
-# # TEMP!!! Update saturation masks after distortion correction?
-#             # Mask the saturated pixels.
-#             saturationMask = np.zeros(sci_data.shape)
-#             saturationMask[dq_bool_256] = -1e4
+            # Update saturation masks after distortion correction.
+            saturationMask = np.zeros(sci_data.shape)
+            saturationMask[dq_bool_256] = -1e4
 
 
     # ========== IMAGE ALIGNMENT (REGISTRATION) ========== #
