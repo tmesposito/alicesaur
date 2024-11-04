@@ -13,8 +13,9 @@ from astropy.io import fits
 from astropy.time import Time, TimeDelta
 from astropy.table import Table
 from astroquery.mast import Observations
-from six.moves.urllib import request as urlrequest, parse as urlparse, error as urlerror
+from urllib import request as urlrequest, parse as urlparse, error as urlerror
 from tempfile import TemporaryDirectory
+from pprint import pprint
 
 from alicesaur.utils import check_mkdir
 
