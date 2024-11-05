@@ -83,12 +83,27 @@ def masked_pixels_coords(seg_map, csv_file_path='masked_pixel_yx.csv'):
 
     print(f"Saved masked pixel coordinates to {csv_file_path}")
 
+
+def save_seg_map_as_fits(seg_map, output_file='seg_map.fits'):
+    """
+    Save the segmentation map as a .fits file.
+    
+    Parameters:
+        seg_map: The 2D array with the masking done (the segmentation map)
+    """
+    
+    hdu = fits.PrimaryHDU(seg_map.data)
+    hdu.writeto(output_file, overwrite=True)
+    print(f"Segmentation map saved as {output_file}")
+
 def main():
     data = load_fits_data()
     final_data, threshold = subtract_background(data)
     seg_map = process_data(final_data, threshold)
     seg_map = exclude_center_from_segmentation(seg_map, data)
     masked_pixels_coords(seg_map)
+    save_seg_map_as_fits(seg_map)
+    
     return seg_map
 
 if __name__ == "__main__":
