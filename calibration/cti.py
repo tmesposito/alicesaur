@@ -345,7 +345,12 @@ class CTI():
                 # Ignore FITS with wrong occulter position.
                 with fits.open(filename, mode='readonly') as hdu:
                     hdr = hdu[0].header
+                    hdr_sci = hdu[1].header
                     occulter = hdr.get('PROPAPER', '')
+                    if hdr_sci.get('EXPFLAG', '') == 'INTERRUPTED':
+                        self.logger.info(f"Ignoring {os.path.basename(filename)} for "\
+                                         f"EXPFLAG = {hdr_sci.get('EXPFLAG')}")
+                        continue
                     if (download_mode == 'science') and \
                             (self.obsMode is not None) and \
                             (occulter != self.obsMode.upper()):
@@ -357,7 +362,7 @@ class CTI():
 
     # Find and update the headers with the best reference files and download them
     def download_ref_files(self, image_list):
-        self.logger.info(f'CTI correction: Downloading reference files for:\n{image_list}\n')
+        self.logger.info(f'CTI correction: Downloading reference files for following {len(image_list)} images:\n{image_list}\n')
         images = ' '.join(image_list)
         subprocess.check_output('crds bestrefs --files {} --sync-references=1 --update-bestrefs'.format(images),
                                 shell=True, stderr=subprocess.DEVNULL)
@@ -391,7 +396,28 @@ class CTI():
             cf.copy_files_check(self.ccd_dir, self.science, files=f'{ext}')
 
 
-    def run_cti(self, pids, target_name=None, clean=True):
+    def run_cti(self, pids, target_name=None, clean=True, download=True):
+        """
+
+        Parameters
+        ----------
+        pids : TYPE
+            DESCRIPTION.
+        target_name : TYPE, optional
+            DESCRIPTION. The default is None.
+        clean : TYPE, optional
+            DESCRIPTION. The default is True.
+        download : bool, optional
+            False to skip downloading of files for CTI correction; if this is
+            done, will attempt to use existing files in the established
+            directories. Default is True.
+
+        Returns
+        -------
+        bool
+            DESCRIPTION.
+
+        """
 
         # Get the obs_id values from the PIDs.
         self.pids = pids
@@ -401,26 +427,33 @@ class CTI():
         if len(self.ccd_oids) == 0:
             return False
 
+# # TEMP!!!
+#         self.ccd_oids = self.ccd_oids[24:32]
+#         breakpoint()
+
         # Download data.
         # Choices for product_types: 'RAW', 'FLT', 'CRJ', 'EPC', 'SPT', 'ASN', 'SX2'
-        self.download_data(self.ccd_oids, self.ccd_dir, product_types={'RAW'},
-                           download_mode='science')
-        self.logger.info("CTI correction: Finished downloading CCD data\n")
+        if download:
+            self.download_data(self.ccd_oids, self.ccd_dir, product_types={'RAW'},
+                               download_mode='science')
+            self.logger.info("CTI correction: Finished downloading CCD data\n")
 
         # Download reference files.
         # # Check in the Notebook directory
         # os.chdir(cwd)
         # Get a list of images for the CCD and download reference files
-        self.ccd_list = glob.glob(os.path.join(self.ccd_dir, '*_raw.fits'))
+        self.ccd_list = sorted(glob.glob(os.path.join(self.ccd_dir, '*_raw.fits')))
         # self.ccd_list = glob.glob(os.path.join(self.ccd_dir, '*_flt.fits'))
         # ccd_list = [fp.replace('flt.fits', 'raw.fits') for fp in tmp_list]
-        self.download_ref_files(self.ccd_list)
-        self.logger.info("CTI correction: Finished downloading reference files\n")
+        if download:
+            self.download_ref_files(self.ccd_list)
+            self.logger.info("CTI correction: Finished downloading reference files\n")
 
         # Copy files for processing.
         self.make_working_copies()
 
-        self.download_darks()
+        if download:
+            self.download_darks()
         # Run the CTI correction.
         try:
             stis_cti(science_dir=os.path.abspath(self.science),

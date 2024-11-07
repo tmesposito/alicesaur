@@ -23,6 +23,7 @@ from scipy.interpolate import interp1d
 from scipy.stats import median_abs_deviation
 
 # Internal imports
+from alicesaur import __version__
 from alicesaur import pipeline
 from alicesaur.psfsub import stis_psfsub
 from alicesaur import utils
@@ -75,6 +76,9 @@ class Pipeline(object):
     cid = ''
 
     def __init__(self, **kwargs):
+
+        # Get pipeline version number from __version__.py.
+        self.version = __version__.__version__
 
         self.pipelineStartTime = datetime.utcnow().strftime('%Y-%m-%dT%H-%M-%S')
 
@@ -194,6 +198,7 @@ class Pipeline(object):
 
         self.logger = logger
         self.logger.info(f'Started alicesaur pipeline at UTC {startTime}')
+        self.logger.info(f'Alicesaur pipeline version = {self.version}')
 
         return
 
@@ -1163,6 +1168,7 @@ class Pipeline(object):
                     hdu.header.add_history('Created by {}'.format(getpass.getuser()))
                 except:
                     hdu.header.add_history('Created by unknown user')
+            hdu.header['ALCSRVER'] = (self.version, 'Alicesaur pipeline version number')
             hdu.header['TARGNAME'] = (newPriHdr.get('TARGNAME', ''))
             hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
             hdu.header['FILETYPE'] = (filetype)
@@ -1228,7 +1234,7 @@ class Pipeline(object):
         return
 
 
-    def save_unified_to_fits(self, data, unit, cid=''):
+    def save_unified_to_fits(self, data, unit, headers, cid=''):
         """
 
         """
@@ -1246,17 +1252,20 @@ class Pipeline(object):
         filetype = 'Unified images from combined CRSPLITS'
         cmt1 = f'{self.inputType} input file type'
 
-        hdu = fits.PrimaryHDU(data=np.array(data).astype('float32'))
+        # Make the primary HDU and HDUList to hold it.
+        hdu = fits.PrimaryHDU(data=None)
+        hdul = fits.HDUList(hdus=[hdu])
         if not 'HISTORY' in hdu.header:
             try:
                 hdu.header.add_history('Created by {}'.format(getpass.getuser()))
             except:
                 hdu.header.add_history('Created by unknown user')
+        hdu.header['ALCSRVER'] = (self.version, 'Alicesaur pipeline version number')
         hdu.header['TARGNAME'] = (self.targ)
         hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
         hdu.header['FILETYPE'] = (filetype)
-        hdu.header['NCOMBINE'] = (self.sciHdrs[0][1].get('NCOMBINE', 1),
-                                  'Number of images combined')
+        # hdu.header['NCOMBINE'] = (self.sciHdrs[0][1].get('NCOMBINE', 1),
+        #                           'Number of images combined')
         hdu.header['INPUTTYP'] = (self.inputType, 'Type of input data')
         hdu.header['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
         # hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
@@ -1303,7 +1312,57 @@ class Pipeline(object):
         hdu.header.add_comment('Reduction info file: {}'.format(self.infoPath))
         hdu.header.add_comment(f'Image integration times (s): {self.exptimes_all_s}'.replace('\n', ' '))
 
-        hdu.writeto(self.dataDir + saveName, overwrite=True)
+        # Now write extensions, one for each image slice. These hold data and
+        # details for the individual images in this unified cube.
+        for ii in range(len(data)):
+            extHDU = fits.ImageHDU(data=np.array(data[ii]).astype('float32'),
+                                   header=None, name='SCI', ver=ii+1)
+            extHDU.header['IMGINDEX'] = (ii, 'Index of image matching this header')
+            extHDU.header['ALCSRVER'] = (self.version, 'Alicesaur pipeline version number')
+            extHDU.header['TARGNAME'] = (headers[ii][0]['TARGNAME'], 'Target name for this image index')
+            # extHdr['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
+            extHDU.header['FILETYPE'] = (filetype)
+            extHDU.header['NCOMBINE'] = (headers[ii][0].get('CRSPLIT', 1),
+                                      'Number of CRSPLITS combined for this image index')
+            extHDU.header['INPUTTYP'] = (self.inputType, 'Type of input data')
+            extHDU.header['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
+            # hdu.header['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
+            # hdu.header['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
+            # hdu.header['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
+            # hdu.header['ORIGCENY'] = (np.mean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
+            # hdu.header['ORIGCENX'] = (np.mean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
+            extHDU.header['TEXPTIME'] = (headers[ii][0]['TEXPTIME'], 'Image total integration time in s')
+            extHDU.header['BUNIT'] = (self.bunit, 'brightness units')
+            extHDU.header['PHOTFLAM'] = (headers[ii][0]['PHOTFLAM'], 'inverse sensitivity, ergs/s/cm2/Ang per count/s')
+            # Propagate certain keys from individual raw FITS.
+            for key in ['TELESCOP', 'INSTRUME','EQUINOX','RA_TARG', 'DEC_TARG',
+                        'PROPOSID', 'TDATEOBS',
+                        'CCDAMP', 'CCDGAIN', 'CCDOFFST', 'OBSTYPE', 'OBSMODE',
+                        'PHOTMODE', 'SUBARRAY', 'DETECTOR', 'OPT_ELEM',
+                        'APERTURE', 'PROPAPER', 'FILTER', 'APER_FOV',
+                        'CRSPLIT', 'PHOTZPT', 'PHOTPLAM', 'PHOTBW', ]:
+                try:
+                    extHDU.header[key] = (headers[ii][0][key],
+                                   headers[ii][0].comments[key])
+                except:
+                    self.logger.warning(f"Could not propagate header keyword {key}")
+            # if self.bgCen is not None:
+            #     hdu.header['BGCENTY'] = (self.bgCen[0], 'Science Y center background sample')
+            #     hdu.header['BGCENTX'] = (self.bgCen[1], 'Science X center background sample')
+            # else:
+            #     hdu.header['BGCENTY'] = (None, 'Science Y center background sample')
+            #     hdu.header['BGCENTX'] = (None, 'Science X center background sample')
+            # if self.bgCenRef is not None:
+            #     hdu.header['BGCENTYR'] = (self.bgCenRef[0], 'Reference Y center background sample')
+            #     hdu.header['BGCENTXR'] = (self.bgCenRef[1], 'Reference X center background sample')
+            # else:
+            #     hdu.header['BGCENTYR'] = (None, 'Reference Y center background sample')
+            #     hdu.header['BGCENTXR'] = (None, 'Reference X center background sample')
+            # hdu.header['BGRADIUS'] = (self.bgRadius, 'Radius background sample region (pix)')
+            extHDU.header['FIXPIX'] = (not self.noFixPix, 'Bad pixels were fixed?')
+            hdul.append(extHDU)
+
+        hdul.writeto(self.dataDir + saveName, overwrite=True)
         self.logger.info(f"{filetype} SAVED as {self.dataDir + saveName}")
 
         return
@@ -1362,6 +1421,7 @@ class Pipeline(object):
                 newPriHdr.add_history('Created by {}'.format(getpass.getuser()))
             except:
                 newPriHdr.add_history('Created by unknown user')
+        newPriHdr['ALCSRVER'] = (self.version, 'Alicesaur pipeline version number')
         newPriHdr['TARGNAME'] = (self.targ)
         newPriHdr['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
         newPriHdr['FILETYPE'] = (filetype)
@@ -1935,8 +1995,11 @@ class Pipeline(object):
 
             # Get an array of the number of CRSPLITS per image.
             n_crsplits = np.array([hdr[0].get('CRSPLIT') for hdr in sci_headers])
-            # Average together the CRSPLITS.
+            # Average together the CRSPLITS, which does NOT conserve the flux.
             unifiedImgs = np.nanmean(sci_data, axis=1)
+            # Multiply the averaged images by the number of CRSPLITS to
+            # conserve the total flux of the CRSPLIT-integrated images.
+            unifiedImgs *= n_crsplits.reshape(unifiedImgs.shape[0], 1, 1)
 
             for ii in range(sci_data.shape[0]):
                 # Update headers for the unified images to reflect correct
@@ -1979,7 +2042,7 @@ class Pipeline(object):
         # Optionally output the integrated images as FITS here.
         if self.saveAuxiliary:
             self.save_unified_to_fits([ii[1] for ii in imgsHdrs[0]], unit='DN',
-                                      cid=self.cid)
+                                      headers=imgsHdrs[1], cid=self.cid)
 
 
     # ========== CALIBRATE FLUX ========== #
@@ -2266,14 +2329,37 @@ class Pipeline(object):
                 radProfMax = None
                 self.subRadProf = False
 
-            psfSubImgs, refScaleFactors = stis_psfsub.adi_subtract_psf(
+            # Estimate initial brightness scaling for reference PSFs.
+            # Make a set of combination PSF subtraction masks that are the
+            # science masks + all (logical or) ref masks.
+            # Apply those combo masks to both science and ref images, then
+            # take their ratios and sum to get the approximate ratio of
+            # PSF brightnesses between ref and science images.
+            comboRefSciMasks = psfSubMasks[self.sciInds] | np.any(psfSubMasks[self.refInds], axis=0)
+            ratioSums_ref_sci = []
+            for ii, ind in enumerate(self.sciInds):
+                ratio_ref_sci_ii = np.nansum(np.nanmedian(self.workingImgs[self.refInds] * ~comboRefSciMasks[ii], axis=0)) / np.nansum(self.workingImgs[ind] * ~comboRefSciMasks[ii])
+                ratioSums_ref_sci.append(np.round(np.nansum(ratio_ref_sci_ii), 4))
+            self.logger.info("Ratios of reference PSF to science PSF by "\
+                             f"science image: {ratioSums_ref_sci}")
+            ratio_ref_sci = np.nanmedian(ratioSums_ref_sci)
+            self.logger.info("Median ratio of reference PSF to science PSF "\
+                             f"brightness = {ratio_ref_sci:.3f}")
+            # Don't let ratio stray too far from unity.
+            if (ratio_ref_sci < 0.05) or (ratio_ref_sci > 20):
+                ratio_ref_sci = 1.
+            self.logger.info(f"Using {1/ratio_ref_sci:.3f} (1/{ratio_ref_sci:.3f}) as initial reference PSF "\
+                             "scaling ratio\n")
+            C0 = np.log10(1/ratio_ref_sci)
+
+            psfSubImgs, psfSubImgs_subRadProf, refScaleFactors = stis_psfsub.adi_subtract_psf(
                                     self.workingImgs[self.sciInds],
                                     self.workingImgs[self.sciInds],
                                     psfSubMasks[self.sciInds],
                                     psfSubMasks_refs,
                                     self.stars[self.sciInds], self.deltaPAMin,
                                     self.orientats[self.sciInds],
-                                    C0=0., rmin=rmin, rmax=sub_r_out, ann=ann,
+                                    C0=C0, rmin=rmin, rmax=sub_r_out, ann=ann,
                                     radProfPaList=radProfPaList,
                                     radProfPaHW=radProfPaHW,
                                     radProfMax=radProfMax,
@@ -2282,7 +2368,9 @@ class Pipeline(object):
                                     bgCen=self.bgCen, bgRadius=self.bgRadius,
                                     optimize_dither=False)
             self.psfSubImgs = psfSubImgs
+            self.psfSubImgs_subRadProf = psfSubImgs_subRadProf
             self.refScaleFactors = refScaleFactors
+            self.logger.info(f"Ref scale factors by science image: {refScaleFactors}")
 
         # PyKLIP RDI subtraction.
         elif psfSubMode.lower() == 'pyklip-rdi':
