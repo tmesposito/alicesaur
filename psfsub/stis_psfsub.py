@@ -636,7 +636,7 @@ def adi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
     ADI PSF subtraction wrapper.
     """
 
-    subImgs, refScaleFactors = rdi_subtract_psf(sciImgs, refImgs, sciMasks,
+    subImgs, subImgs_subRadProf, refScaleFactors = rdi_subtract_psf(sciImgs, refImgs, sciMasks,
                      refMasks, sciStars,
                      C0=C0, rmin=rmin, rmax=rmax, ann=ann, orientats=orientats,
                      radProfPaList=radProfPaList, radProfPaHW=radProfPaHW,
@@ -644,7 +644,7 @@ def adi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                      bgCen=bgCen, bgRadius=bgRadius, subRadProf=subRadProf,
                      deltaPAMin=deltaPAMin, optimize_dither=optimize_dither)
 
-    return subImgs, refScaleFactors
+    return subImgs, subImgs_subRadProf, refScaleFactors
 
 
 def make_stis_dataset(dataset, inputPaths, inputImgs=None, IWA=None, OWA=None,
