@@ -37,7 +37,7 @@ from alicesaur.improcess.manipulate import zero_pad
 from alicesaur.gaia.astrometry import main
 from alicesaur.gaia.gaia_utils import get_gaia_id
 from alicesaur.plot.disk_plot import plot_radprof_1d
-from alicesaur.scripts.astrosniff import main_masking
+from alicesaur.scripts.astrosniff import *
 
 
 # Set matplotlib backend based on OS.
@@ -312,17 +312,20 @@ class Pipeline(object):
         if len(self.fileList) == 0:
             self.logger.warning(f"*** NO FITS files found at {self.dataDir + '*_' + suffix +'.fits'} *** !!\n")
         
-        
+
+    def make_mask(self):
+        """
+        Execute astrosniff and return the mask 2D array.
+        """
         self.logger.info("Starting masking process...")
         try:
             seg_map = main_masking(self)
-            self.logger.info("Masking process completed successfully.")
+            self.logger.info("Masking process completed successfuly.")
         except Exception as e:
             self.logger.error(f"Masking process failed with error: {e}")
             raise
-        
-        return
-    
+
+        return seg_map
 
 
 
@@ -1609,6 +1612,9 @@ class Pipeline(object):
 
         # Find image filepaths in self.dataDir.
         self.find_imgs(suffix=self.inputType)
+
+        # Run astrosniff to create the 2D mask array.
+        self.make_mask()
 
 # FIX ME!!! Turn these hard-coded DQ fixing flags into input options.
 # DQ=8192 flags (cosmic-ray rejection) are not fixed by default because they
