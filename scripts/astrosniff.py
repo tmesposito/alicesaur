@@ -1,16 +1,6 @@
 from astropy.io import fits
 from astropy.stats import SigmaClip
 from photutils.background import Background2D, MedianBackground
-from photutils.segmentation import make_2dgaussian_kernel
-from astropy.convolution import convolve
-from photutils.segmentation import detect_sources
-import numpy as np
-import pandas as pd
-import os
-
-from astropy.io import fits
-from astropy.stats import SigmaClip
-from photutils.background import Background2D, MedianBackground
 from photutils.segmentation import make_2dgaussian_kernel, detect_sources
 from astropy.convolution import convolve
 import numpy as np
@@ -22,16 +12,21 @@ def main_masking(self):
     Main function for loading FITS data, processing it, generating a segmentation map, 
     excluding a central region, saving masked pixel coordinates, and saving the segmentation map as a FITS file.
     """
+    data = None
+    original_filename = None
+
     for filename in os.listdir(self.dataDir):
         if filename.startswith('final_') and filename.endswith('.fits'):
             file_path = os.path.join(self.dataDir, filename)
             with fits.open(file_path) as file:
                 data = file[0].data[0] 
-
+            original_filename = filename
             print(f"Loaded data from {filename}")
             break
-    else:
-        raise FileNotFoundError(f"No final images found in the directory: {self.dataDir}")
+
+    if data is None:
+        print("No final FITS images found in the directory. Skipping masking process.")
+        return None
 
     sigma_clip = SigmaClip(sigma=3)
     bkg_estimator = MedianBackground()
@@ -45,7 +40,7 @@ def main_masking(self):
     seg_map.data[seg_map.data > 0] = 1
 
     exclude_center = (1024, 1024)
-    exclude_radius = 120
+    exclude_radius = 50
     y, x = np.ogrid[:data.shape[0], :data.shape[1]]
     distance_from_center = np.sqrt((x - exclude_center[0])**2 + (y - exclude_center[1])**2)
     exclusion_mask = distance_from_center <= exclude_radius
@@ -57,10 +52,11 @@ def main_masking(self):
     df.to_csv(csv_file_path, index=False)
     print(f"Saved masked pixel coordinates to {csv_file_path}")
 
-    output_file = f"segmap_{filename.split('final_')[1]}"
+    output_file = f"segmap_{original_filename.split('final_')[1]}"
     output_path = os.path.join(self.dataDir, output_file)
     hdu = fits.PrimaryHDU(seg_map.data)
     hdu.writeto(output_path, overwrite=True)
     print(f"Segmentation map saved as {output_path}")
 
     return seg_map
+
