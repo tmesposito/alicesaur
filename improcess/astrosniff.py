@@ -15,10 +15,17 @@ def load_fits_data(self):
     for filename in os.listdir(self.dataDir):
         if filename.startswith('final_') and filename.endswith('.fits'):
             file_path = os.path.join(self.dataDir, filename)
-            with fits.open(file_path) as file:
-                data = file[0].data[0]  # This varies depending on slice.
+            with fits.open(file_path) as hdul:
+                data_cube = hdul[0].data
+                # If there are multiple data slices, use the first.
+                if data_cube.ndim == 3:
+                    data = data_cube[0]
+                else:
+                    data = data_cube
+
             return data, filename
-    raise FileNotFoundError(f"No final FITS image found in the directory: {self.dataDir}")
+
+    return None, None
 
 def subtract_background(data):
     """
@@ -72,11 +79,13 @@ def save_seg_map_as_fits(seg_map, original_filename, output_directory='.'):
 def main_masking(self):
 
     data, original_filename = load_fits_data(self)
-    final_data, threshold = subtract_background(data)
-    seg_map = process_data(final_data, threshold)
-    seg_map = exclude_center_from_segmentation(seg_map, data)
-    csv_path = os.path.join(self.dataDir, 'masked_pixel_yx.csv')
-    masked_pixels_coords(seg_map, csv_path)
-    save_seg_map_as_fits(seg_map, original_filename, output_directory=self.dataDir)
-
-    return seg_map
+    if data is not None:
+        final_data, threshold = subtract_background(data)
+        seg_map = process_data(final_data, threshold)
+        seg_map = exclude_center_from_segmentation(seg_map, data)
+        csv_path = os.path.join(self.dataDir, 'masked_pixel_yx.csv')
+        masked_pixels_coords(seg_map, csv_path)
+        save_seg_map_as_fits(seg_map, original_filename, output_directory=self.dataDir)
+        return seg_map
+    else:
+        return None

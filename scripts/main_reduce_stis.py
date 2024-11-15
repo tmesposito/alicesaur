@@ -91,6 +91,9 @@ if __name__ == "__main__":
     parser.add_argument('--noFixPix', dest="noFixPix",
                         action="store_true", help=desc)
 
+    desc = 'Use --noAutoMask to NOT apply automatic source masks.'
+    parser.add_argument('--noAutoMask', action="store_true", help=desc)
+
     desc = 'Use --noMaskSaturation to NOT mask saturated pixels in each '\
         'individual image when doing PSF subtraction and final image collapse.'
     parser.add_argument('--noMaskSaturation', dest="noMaskSaturation",
@@ -113,17 +116,44 @@ if __name__ == "__main__":
                         action="store_true", help=desc)
 
     desc = 'Use --debug to enter debugger at various steps and plot some info.'
-    parser.add_argument('--debug',
-                        action="store_true", help=desc)
+    parser.add_argument('--debug', action="store_true", help=desc)
 
     desc = 'Use --do-gaia to do the Gaia astrometry thingy.'
-    parser.add_argument('--do-gaia',
-                        action="store_true", help=desc)
+    parser.add_argument('--do-gaia', action="store_true", help=desc)
+
+    desc = 'Use --iterate to run the pipeline with multiple consecutive '\
+        'iterations to refine the final result.'
+    parser.add_argument('--iterate', action="store_true", help=desc)
 
     args = parser.parse_args()
 
-    # Create the reduction pipeline instance.
-    pl = PipelineSTIS(**vars(args))
+    # Iterative pipeline run.
+    if args.iterate:
+        print("\nRunning iterative pipeline\n")
+        # Create a "detault" reduction pipeline instance.
+        pl = PipelineSTIS(**vars(args))
+        # Run the default reduction.
+        pl.run()
 
-    # Run the reduction.
-    pl.run()
+        try:
+            pl.logger.info("Running second pipeline iteration")
+        except:
+            pass
+
+        # Now re-run the pipeline from the axf/axc inputs a second time,
+        # using input from the first run's output.
+        updated_args = vars(args)
+        updated_args['inputType'] = 'axc'
+        updated_args['noFixPix'] = True
+        updated_args['logger'] = pl.logger
+        pl = PipelineSTIS(**updated_args)
+        # Run the second reduction.
+        pl.run()
+
+    # Normal (single) pipeline run.
+    else:
+        # Create the reduction pipeline instance.
+        pl = PipelineSTIS(**vars(args))
+
+        # Run the reduction.
+        pl.run()

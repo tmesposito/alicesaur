@@ -37,7 +37,7 @@ from alicesaur.improcess.manipulate import zero_pad
 from alicesaur.gaia.astrometry import main
 from alicesaur.gaia.gaia_utils import get_gaia_id
 from alicesaur.plot.disk_plot import plot_radprof_1d
-from alicesaur.scripts.astrosniff import *
+from alicesaur.improcess import astrosniff
 
 
 # Set matplotlib backend based on OS.
@@ -114,8 +114,9 @@ class Pipeline(object):
             print(ee)
             sys.exit(0)
 
-        # Set up the logger for this pipeline.
-        self.set_up_logger(startTime=self.pipelineStartTime, level='INFO')
+        # Set up the logger for this pipeline, if none exists yet.
+        if not hasattr(self, 'logger'):
+            self.set_up_logger(startTime=self.pipelineStartTime, level='INFO')
         self.logger.info(f"Using data directory {self.dataDir}")
 
         # Adjust custom identifier string to add underscore.
@@ -286,10 +287,12 @@ class Pipeline(object):
         else:
             self.bgCenRef = None
 
-        self.subFinalRadProf = False
+        self.subFinalRadProf = True
         if self.info[self.obsMode].get('radProfSub') is not None:
             if self.info[self.obsMode]['radProfSub'].get('postCombine') in ['True', True]:
                 self.subFinalRadProf = True
+            else:
+                self.subFinalRadProf = False
 
         return
 
@@ -319,11 +322,14 @@ class Pipeline(object):
         """
         self.logger.info("Starting masking process...")
         try:
-            seg_map = main_masking(self)
-            self.logger.info("Masking process completed successfuly.")
+            seg_map = astrosniff.main_masking(self)
+            if seg_map is not None:
+                self.logger.info("Auto star asking process completed successfully.")
+            else:
+                self.logger.info("No auto star masking performed: no existing final image found.")
         except Exception as e:
-            self.logger.error(f"Masking process failed with error: {e}")
-            raise
+            self.logger.error(f"Auto star masking process failed with error: {e}")
+            seg_map = None
 
         return seg_map
 
@@ -1614,7 +1620,10 @@ class Pipeline(object):
         self.find_imgs(suffix=self.inputType)
 
         # Run astrosniff to create the 2D mask array.
-        self.make_mask()
+        star_mask = self.make_mask()
+        if star_mask is not None:
+            # Reformat the output slightly to an ndarray.
+            star_mask = np.array(star_mask)
 
 # FIX ME!!! Turn these hard-coded DQ fixing flags into input options.
 # DQ=8192 flags (cosmic-ray rejection) are not fixed by default because they
@@ -2138,6 +2147,12 @@ class Pipeline(object):
             # psfSubMasks[ind][radii < sub_r_in] = np.nan
             # psfSubMasks[ind] += sourceMasks[ind]
 
+            # Add star mask to sourceMasks, rotated to the correct PA.
+            if star_mask is not None:
+                sourceMasks[ind] += self.derotate([star_mask],
+                                                  [-orientats[ind]],
+                                                  [self.stars[ind]])[0].astype(bool)
+
     # # TEMP!!! TEST ONLY PSF SUBTRACTING BASED ON DIFFRACTION SPIKES.
             if psfsubOnSpikesOnly:
                 # psfSubMasks[ind] = ~masks[ind]
@@ -2569,12 +2584,15 @@ class Pipeline(object):
 
             else:
                 finalImg_noFinalProfSub = None
+                finalImg_finalProfSub = None
 
             # Do one final background subtraction.
             if info[obsMode].get('bgCenFinal_yx') is not None:
                 finalImg, bgFinal = utils.subtract_bg(finalImg, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
-                finalImg_noFinalProfSub, bgFinal = utils.subtract_bg(finalImg_noFinalProfSub, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
-                finalImg_finalProfSub, bgFinal = utils.subtract_bg(finalImg_finalProfSub, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
+                if finalImg_noFinalProfSub is not None:
+                    finalImg_noFinalProfSub, bgFinal = utils.subtract_bg(finalImg_noFinalProfSub, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
+                if finalImg_finalProfSub is not None:
+                    finalImg_finalProfSub, bgFinal = utils.subtract_bg(finalImg_finalProfSub, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
 
             # Write the final combined PSF-subtracted image(s) to FITS file.
             if self.saveFinal:
@@ -2673,34 +2691,44 @@ class Pipeline(object):
                             stdMap[(radii >= rr - 0.5) & (radii < rr + 0.5)] = np.nan
                     # Combine noise terms.
                     errorMaps_electrons.append(np.sqrt(np.nansum([poissonMap**2, stdMap**2], axis=0)))
-                
+
                 # Fractional error maps.
                 fracerr = np.array(errorMaps_electrons)/rotImgs_electrons
                 # Error maps in units of counts per second.
                 errorMaps = fracerr*rotImgs # [counts s-1]
                 # Number of non-NaN values in each pixel across all PSF-subtracted images.
                 countAveragedPix = len(errorMaps) - np.sum(np.isnan(errorMaps), axis=0)
-                
+
                 # Propagated standard error of the mean.
                 finalErrorMap = np.sqrt(np.nansum(errorMaps**2, axis=0))/np.sqrt(countAveragedPix)
-                
-                finalSNR = finalImg/finalErrorMap # [SNR]
-                finalSNR_noFinalProfSub = finalImg_noFinalProfSub/finalErrorMap # [SNR]
-                finalSNR_finalProfSub = finalImg_finalProfSub/finalErrorMap # [SNR]
 
                 if self.saveFinal:
-                    # Save the error map and SNR map too.
+                    # Save the error map.
                     try:
                         self.save_psfsub_to_fits(finalErrorMap, 'error',
                                                  unit=newUnit, cid=self.cid)
                     except:
                         self.logger.error("*** FAILED to save Error map!!!\n")
+
+                SNR_list = []
+                if finalImg is not None:
+                    finalSNR = finalImg/finalErrorMap # [SNR]
+                    SNR_list.append(finalSNR)
+                if finalImg_noFinalProfSub is not None:
+                    finalSNR_noFinalProfSub = finalImg_noFinalProfSub/finalErrorMap # [SNR]
+                    SNR_list.append(finalSNR_noFinalProfSub)
+                if finalImg_finalProfSub is not None:
+                    finalSNR_finalProfSub = finalImg_finalProfSub/finalErrorMap # [SNR]
+                    SNR_list.append(finalSNR_finalProfSub)
+
+                if self.saveFinal:
+                    # Save the SNR maps too.
                     try:
-                        self.save_psfsub_to_fits([finalSNR_finalProfSub,
-                                                  finalSNR_noFinalProfSub,
-                                                  finalSNR],
-                                                 'snr',
-                                                 unit=newUnit, cid=self.cid)
+                        if len(SNR_list) > 0:
+                            self.save_psfsub_to_fits(SNR_list, 'snr',
+                                                    unit=newUnit, cid=self.cid)
+                        else:
+                            self.logger.warning("No SNR maps to save\n")
                     except:
                         self.logger.error("*** FAILED to save SNR map!!!\n")
 
