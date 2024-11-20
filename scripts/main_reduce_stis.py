@@ -5,6 +5,7 @@ import sys
 import argparse
 import pdb
 import time
+from glob import glob
 
 # Internal imports
 try:
@@ -131,24 +132,53 @@ if __name__ == "__main__":
     if args.iterate:
         print("\nRunning iterative pipeline\n")
         # Create a "detault" reduction pipeline instance.
-        pl = PipelineSTIS(**vars(args))
+        updated_args = vars(args).copy()
+        # Add an "iter1" suffix to files in first iteration.
+        if args.cid == "":
+            updated_args['cid'] = "iter1"
+        else:
+            updated_args['cid'] = "iter1_" + args.cid
+        pl = PipelineSTIS(**updated_args)
         # Run the default reduction.
         pl.run()
 
-        try:
-            pl.logger.info("Running second pipeline iteration")
-        except:
-            pass
+        # Determine the highest level intermediate product present and
+        # use that as the inputType for the second iteration.
+        inputType_options = ['axc', 'axf', 'axt', 'xfc', 'xft', 'flc', 'flt']
+        for it in inputType_options:
+            files_present = glob(os.path.join(pl.dataDir, f"*_{it}.fits"))
+            if len(files_present) > 0:
+                new_inputType = it
+                break
+            else:
+                new_inputType = None
 
-        # Now re-run the pipeline from the axf/axc inputs a second time,
-        # using input from the first run's output.
-        updated_args = vars(args)
-        updated_args['inputType'] = 'axc'
-        updated_args['noFixPix'] = True
-        updated_args['logger'] = pl.logger
-        pl = PipelineSTIS(**updated_args)
-        # Run the second reduction.
-        pl.run()
+        if new_inputType is None:
+            try:
+                pl.logger.warning("No high-level intermediate FITS files "\
+                                  "found in {pl.dataDir}. Skipping second "\
+                                  "iteration of pipeline.")
+            except:
+                print("No high-level intermediate FITS files "\
+                      "found in {pl.dataDir}. Skipping second "\
+                      "iteration of pipeline.")
+        else:
+            try:
+                pl.logger.info("Running second pipeline iteration with "\
+                               f"inputType = {new_inputType}")
+            except:
+                print("Running second pipeline iteration with "\
+                      f"inputType = {new_inputType}")
+
+            # Now re-run the pipeline from the axf/axc inputs a second time,
+            # using input from the first run's output.
+            updated_args = vars(args).copy()
+            updated_args['inputType'] = new_inputType
+            updated_args['noFixPix'] = True
+            updated_args['logger'] = pl.logger
+            pl = PipelineSTIS(**updated_args)
+            # Run the second reduction.
+            pl.run()
 
     # Normal (single) pipeline run.
     else:
