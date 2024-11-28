@@ -316,7 +316,7 @@ class Pipeline(object):
             self.logger.warning(f"*** NO FITS files found at {self.dataDir + '*_' + suffix +'.fits'} *** !!\n")
         
 
-    def make_mask(self):
+    def make_star_mask(self):
         """
         Execute astrosniff and return the mask 2D array.
         """
@@ -1620,10 +1620,14 @@ class Pipeline(object):
         self.find_imgs(suffix=self.inputType)
 
         # Run astrosniff to create the 2D mask array.
-        star_mask = self.make_mask()
-        if star_mask is not None:
-            # Reformat the output slightly to an ndarray.
-            star_mask = np.array(star_mask)
+        if not self.noAutoMask:
+            star_mask = self.make_star_mask()
+            if star_mask is not None:
+                # Reformat the output slightly to an ndarray.
+                star_mask = np.array(star_mask)
+        else:
+            self.logger.info("Auto star masking is OFF")
+            star_mask = None
 
 # FIX ME!!! Turn these hard-coded DQ fixing flags into input options.
 # DQ=8192 flags (cosmic-ray rejection) are not fixed by default because they
@@ -1776,6 +1780,14 @@ class Pipeline(object):
         self.nSci = np.size(self.sciInds)
         self.nRef = np.size(self.refInds)
 
+        # Force switch to ADI PSF subtraction if no reference images found.
+        if self.nRef == 0:
+            self.psfSubMode = 'adi'
+            psfSubMode = 'adi'
+            self.logger.warning("SWITCHED TO ADI PSF subtraction mode "\
+                                "because no PSF reference images were "\
+                                "identified for RDI mode")
+
         self.logger.info("Science image indices: {}".format(self.sciInds))
         self.logger.info("Ref image indices ({}): {}\n".format(targs[self.refInds], self.refInds))
 
@@ -1923,8 +1935,8 @@ class Pipeline(object):
                 outPath = os.path.join(os.path.dirname(self.fileList[ii]),
                                        os.path.basename(self.fileList[ii]).replace(self.inputType, newSuffix))
 
-                # Add ID suffix to output filename.
-                outPath = os.path.splitext(outPath)[0] + self.cid + '.fits'
+                # # Add ID suffix to output filename.
+                # outPath = os.path.splitext(outPath)[0] + self.cid + '.fits'
 
                 # # Reassemble aligned CRSPLIT images into a new cube with same
                 # # extensions as an flt.

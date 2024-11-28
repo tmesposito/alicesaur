@@ -128,6 +128,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+
+    # Handle target names that contain escape characters "\".
+    if len(args.targ) > 0:
+        if '\\' in args.targ:
+            vars(args)["targ"] = args.targ.replace('\\', '')
+            print(f"\nWARNING: Revised --targ target name to {args.targ} "\
+                  "by removing escape character '\\'\n")
+
     # Iterative pipeline run.
     if args.iterate:
         print("\nRunning iterative pipeline\n")
