@@ -35,6 +35,11 @@ def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
     profList = []
     radList = []
 
+    if (len(paList) == 0) or paHW in [0, None, np.nan]:
+        print("\nWARNING: Not performing radial profile subtraction "\
+              f"because PA list = {paList} and/or paHW = {paHW} are invalid")
+        return np.zeros(img.shape)
+
     for pa in paList:
         rads, prof, profOpp, paPeak, paOppPeak = measure_radial_profile(img,
                                     star=cen, pa=pa, rMax=rMax, mode=mode,

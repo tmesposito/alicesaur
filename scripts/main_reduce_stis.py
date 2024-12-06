@@ -82,6 +82,20 @@ if __name__ == "__main__":
     parser.add_argument('--cid', default='', type=str,
                         nargs='?', help=desc)
 
+    desc = 'Central UTC date of the time span to include in this processing. '
+    desc += 'If given, the pipeline will only include images that were '
+    desc += 'observed during the window <--date-incl> - <--date-incl-span> to '
+    desc += '<--date-incl> + <--date-incl-span>. Format must be YYYY-MM-DD '
+    desc += '(for which the assumed time is 00:00) or YYYY-MM-DDThh:mm. '
+    desc += 'If None (default), no time constraint is applied.'
+    parser.add_argument('--date-incl', default=None, type=str,
+                        nargs='?', help=desc)
+
+    desc = 'Number of days before and after --date-incl to include in the '
+    desc += 'dataset. Default is 2.'
+    parser.add_argument('--date-incl-span', default=2., type=float,
+                        nargs='?', help=desc)
+
     desc = 'Use --noFixCTI to NOT correct for Charge-Transfer Inefficiency in'\
         ' each individual .flt image. Only applies if --input-type flt and '\
         ' --pids [proposal ID] are supplied.'

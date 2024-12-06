@@ -16,8 +16,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import SymLogNorm
 from astropy.io import ascii, fits
-from astropy import table
-from astropy import wcs
+from astropy import table, wcs
+from astropy.time import Time, TimeDelta
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import interp1d
 from scipy.stats import median_abs_deviation
@@ -134,6 +134,19 @@ class Pipeline(object):
                                     'mask_stis_occulters_sx2_bar_wedgeB.fits')
         else:
             self.occultMaskPath = ''
+
+        # Format the start and end date of the time range to be processed as
+        # astropy Time objects.
+        if self.date_incl is not None:
+            self.date_incl_start = Time(self.date_incl, format='isot',
+                                        scale='utc') - \
+                                   TimeDelta(self.date_incl_span, format='jd')
+            self.date_incl_end = Time(self.date_incl, format='isot',
+                                        scale='utc') + \
+                                 TimeDelta(self.date_incl_span, format='jd')
+        else:
+            self.date_incl_start = None
+            self.date_incl_end = None
 
         # Load dataset info and reduction parameters from info.json.
         self.load_info_json(self.dataDir)
@@ -363,7 +376,7 @@ class Pipeline(object):
         return imgsHdrs, np.array(targs)
 
 
-    def load_flt_imgs(self, file_names, plot_images=False, scienceOnly=False):
+    def load_flt_imgs(self, plot_images=False, scienceOnly=False):
         """
         Load and organize extensions of 'flt' FITS files.
         """
@@ -373,7 +386,14 @@ class Pipeline(object):
         dq_bool_8192 = None
         target_names = []
 
-        for file_name in file_names:
+        if len(self.fileList) == 0:
+            self.logger.error(f"*** File list is empty! Nothing to process. "\
+                              "Exiting. ***\n")
+            sys.exit(0)
+
+        fileList_keep = []
+
+        for ff, file_name in enumerate(self.fileList):
             crsplits_sci = []
             crsplits_hdrs_sci = []
             crsplits_err = []
@@ -382,6 +402,24 @@ class Pipeline(object):
             crsplits_hdrs_dq = []
             crsplits_hdrs_all = []
             with fits.open(file_name) as hdu_list:
+
+                # Check image observation date is within allowed date range.
+                if self.date_incl_start is not None:
+                    try:
+                        date_expstart = Time(hdu_list[0].header['TEXPSTRT'],
+                                             format='mjd', scale='utc')
+                        if not ((date_expstart >= self.date_incl_start) and \
+                                (date_expstart <= self.date_incl_end)):
+                            self.logger.warning(f"Excluded file {file_name} "\
+                                "from processing because its start date of "\
+                                f"UTC {date_expstart.utc.isot} was outside "\
+                                "the requested date range.")
+                            continue
+                    except:
+                        self.logger.error(f"Failed to check observation "\
+                                f"date for file {file_name}")
+                fileList_keep.append(file_name)
+
                 for ii, hdu in enumerate(hdu_list):
 
                     # Put all headers into one long list, and then also
@@ -420,6 +458,9 @@ class Pipeline(object):
             sci_headers.append(crsplits_hdrs_sci)
             err_headers.append(crsplits_hdrs_err)
             dq_headers.append(crsplits_hdrs_dq)
+
+        # Update file list with images actually used.
+        self.fileList = np.array(fileList_keep)
 
         self.logger.info(f"Number of CRSPLITS per FITS: {[len(ii) for ii in sci_data]}")
 
@@ -876,55 +917,102 @@ class Pipeline(object):
         Subtract a global background from each image in self.workingImgs.
         """
         bgs = []
-        for ii, im in enumerate(self.workingImgs):
-            if self.bgCen is not None:
-                # Assume all reference images are taken at the same PA.
-                if ii not in self.refInds:
-                    bgCenRot = utils.rotate_yx(self.bgCen, self.alignStar,
-                                               self.orientats[ii])
-    # # FIX ME!!! For modern system of padding images, don't add the star offsets to the bg positions.
-    #                 if self.targ not in noOffsetDatasets:
-    #                     bgCenRot += self.alignStarOffsets[ii]
-                # Still need to offset the reference image for these modern cases
-                # because bg positions are chosen from the raw images.
-                else:
-                    bgCenRot = self.bgCenRef + self.alignStarOffsets[ii]
 
-                if self.workingImgs.ndim > 3:
-                    for jj in range(self.workingImgs.shape[1]):
-                        if np.all(np.isnan(im[jj])):
-                            bgs.append(np.nan)
-                            continue
-                        # Work on a source-masked copy of the aligned image.
-                        imSub, bg = utils.subtract_bg(im[jj].copy(), bgCenRot, self.bgRadius)
-                        # Can't use subtract_bg image output here because it is masked.
-                        self.workingImgs[ii][jj] = im[jj] - bg
-                        bgs.append(bg)
-                else:
-                    imSub, bg = utils.subtract_bg(im.copy(), bgCenRot, self.bgRadius)
-                    # Can't use subtract_bg image output here because it is masked.
-                    self.workingImgs[ii] = im - bg
-                    bgs.append(bg)
-            # Handle the default case of sampling background many places in
-            # the image and take a median.
-            else:
-                if self.workingImgs.ndim > 3:
-                    for jj in range(self.workingImgs.shape[1]):
-                        if np.all(np.isnan(im[jj])):
-                            bgs.append(np.nan)
-                            continue
-                        # Work on a source-masked copy of the aligned image.
-                        bg = utils.randomly_sample_bg(im[jj].copy(),
-                                                 excludeYX=[self.stars[ii]],
-                                                 bgRadius=40,
-                                                 exclusionRadius=300,
-                                                 mask=self.alignMasks[ii].astype(bool))
-                        bgs.append(bg)
-                        self.workingImgs[ii][jj] = im[jj] - bg
+        # Handle science images.
+        for ii in self.sciInds:
+            im_bgsub, bgs = self.subtract_background_image(self.workingImgs[ii],
+                                    star=self.alignStar,
+                                    orientat=self.orientats[ii],
+                                    bgCen=self.bgCen, bgRadius=self.bgRadius,
+                                    alignStarOffset=None,
+                                    mask=self.alignMasks[ii].astype(bool))
+            self.workingImgs[ii] = im_bgsub
+            bgs += bgs
+
+        # Handle reference images.
+        for ii in self.refInds:
+            im_bgsub, bgs = self.subtract_background_image(self.workingImgs[ii],
+                                    star=self.alignStar,
+                                    orientat=self.orientats[ii],
+                                    bgCen=self.bgCenRef, bgRadius=self.bgRadius,
+                                    alignStarOffset=self.alignStarOffsets[ii],
+                                    mask=self.alignMasks[ii].astype(bool))
+            self.workingImgs[ii] = im_bgsub
+            bgs += bgs
 
         self.bgs = np.array(bgs)
 
         return
+
+
+    def subtract_background_image(self, im, star, orientat, bgCen=None,
+                                  bgRadius=40, alignStarOffset=None,
+                                  mask=None):
+        """
+        Subtract a global background from a single image.
+        """
+        bgs = []
+
+        # Case 1: A center is specified for the background sampling.
+        if bgCen is not None:
+            # Assume all reference images are taken at the same PA.
+            if alignStarOffset is None:
+                bgCenRot = utils.rotate_yx(bgCen, star, orientat)
+            # Still need to offset the reference image for these modern cases
+            # because bg positions are chosen from the raw images.
+            else:
+                bgCenRot = bgCen + alignStarOffset
+
+            if im.ndim > 2:
+                im_bgsub = np.empty(im.shape)
+                for jj in range(im.shape[0]):
+                    if np.all(np.isnan(im[jj])):
+                        bgs.append(np.nan)
+                        im_bgsub[jj] = im[jj]
+                        continue
+                    # Work on a source-masked copy of the aligned image.
+                    imSub, bg = utils.subtract_bg(im[jj].copy(), bgCenRot, bgRadius)
+                    # Can't use subtract_bg image output directly here because it is masked.
+                    im_bgsub[jj] = im[jj] - bg
+                    bgs.append(bg)
+            else:
+                imSub, bg = utils.subtract_bg(im.copy(), bgCenRot, bgRadius)
+                # Can't use subtract_bg image output directly here because it is masked.
+                im_bgsub = im - bg
+                bgs.append(bg)
+        # Case 2: No center is specified for the background sampling so we
+        # instead sample it at many places in the image and take a median.
+        else:
+            if im.ndim > 2:
+                im_bgsub = np.empty(im.shape)
+                for jj in range(im.shape[0]):
+                    if np.all(np.isnan(im[jj])):
+                        bgs.append(np.nan)
+                        im_bgsub[jj] = im[jj]
+                        continue
+                    # Work on a source-masked copy of the aligned image.
+                    bg = utils.randomly_sample_bg(im[jj].copy(),
+                                             excludeYX=[star],
+                                             bgRadius=bgRadius,
+                                             exclusionRadius=300,
+                                             mask=mask)
+                    bgs.append(bg)
+                    im_bgsub[jj] = im[jj] - bg
+            else:
+                if np.all(np.isnan(im)):
+                    bgs.append(np.nan)
+                    im_bgsub = im
+                else:
+                    # Work on a source-masked copy of the aligned image.
+                    bg = utils.randomly_sample_bg(im.copy(),
+                                                  excludeYX=[star],
+                                                  bgRadius=bgRadius,
+                                                  exclusionRadius=300,
+                                                  mask=mask)
+                    bgs.append(bg)
+                    im_bgsub = im - bg
+
+        return im_bgsub, bgs
 
     def update_dimensions(self, imgs, hdrs):
         """
@@ -1704,8 +1792,7 @@ class Pipeline(object):
 
         if self.inputType in ['flt', 'flc', 'xft', 'xfc', 'axt', 'axc']:
             sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, \
-                err_headers, dq_headers, targs = self.load_flt_imgs(self.fileList,
-                                                                    plot_images=False,
+                err_headers, dq_headers, targs = self.load_flt_imgs(plot_images=False,
                                                                     scienceOnly=False)
             # Exit if no images were loaded.
             if len(sci_data) == 0:
@@ -1844,8 +1931,7 @@ class Pipeline(object):
             # self.imgShape = np.array(sci_data[0][0].shape)
 
             sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, \
-                err_headers, dq_headers, targs = self.load_flt_imgs(self.fileList,
-                                                                    plot_images=False,
+                err_headers, dq_headers, targs = self.load_flt_imgs(plot_images=False,
                                                                     scienceOnly=False)
             self.allHdrs = all_headers
             self.imgShape = np.array(sci_data[0][0].shape)
@@ -1884,6 +1970,7 @@ class Pipeline(object):
                     targDec = hdr[0]['DEC_TARG']
                     self.starFromWCS_list.append(ww.wcs_world2pix([[targRA, targDec]], 0)[0][::-1]) # [pixels] y,x
             self.starFromWCS = np.nanmean(self.starFromWCS_list, axis=0)
+
 
 # FIX ME!!! The following alignment only aligns the SCI extensions of the
 # FITS cubes. This means the ERR and DQ arrays become out of alignment with
@@ -1969,8 +2056,7 @@ class Pipeline(object):
 
 # FIX ME!!! We can avoid loading from file again here, since the aligned
 # images are stored in memory.
-            sci_data, sci_headers, targs = self.load_flt_imgs(self.fileList,
-                                                              plot_images=False,
+            sci_data, sci_headers, targs = self.load_flt_imgs(plot_images=False,
                                                               scienceOnly=True)
             self.imgShape = np.array(sci_data[0][0].shape)
             self.workingImgs = sci_data
