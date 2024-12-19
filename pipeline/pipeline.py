@@ -337,7 +337,7 @@ class Pipeline(object):
         try:
             seg_map = astrosniff.main_masking(self)
             if seg_map is not None:
-                self.logger.info("Auto star asking process completed successfully.")
+                self.logger.info("Auto star masking process completed successfully.")
             else:
                 self.logger.info("No auto star masking performed: no existing final image found.")
         except Exception as e:
@@ -345,7 +345,6 @@ class Pipeline(object):
             seg_map = None
 
         return seg_map
-
 
 
     def load_imgs(self, suffix='flt'):
@@ -462,6 +461,23 @@ class Pipeline(object):
         # Update file list with images actually used.
         self.fileList = np.array(fileList_keep)
 
+        # Get the full date range of the dataset being used.
+        expstarts = [hdrs[0].get('TEXPSTRT') for hdrs in sci_headers]
+
+        try:
+            time_expstarts = Time(np.array(expstarts), format='mjd',
+                                  scale='utc')
+            self.exposure_start_dates = np.array(sorted(time_expstarts))
+            self.dataset_length_hours = 24*(max(self.exposure_start_dates) - min(self.exposure_start_dates))
+            self.logger.info(f"Temporal length of data set: {self.dataset_length_hours} hours")
+            self.logger.info("Date range of data included (exposure starts): "\
+                             f"UTC {min(self.exposure_start_dates).utc.isot} to "\
+                             f"{max(self.exposure_start_dates).utc.isot}")
+        except:
+            self.exposure_start_dates = expstarts
+            self.logger.warning("Date range of data set could not be "\
+                                "determined.")
+
         self.logger.info(f"Number of CRSPLITS per FITS: {[len(ii) for ii in sci_data]}")
 
         # Check if all images have the same number of CRSPLITS.
@@ -535,6 +551,16 @@ class Pipeline(object):
         else:
             dq_bool_256 = np.zeros(dq_data.shape, dtype=bool)
 
+        # Check that pixels flagged as saturated actually are, because the
+        # DQ flags are apparently wrong often.
+        if np.size(dq_bool_256) > 0:
+            for ii, cube in enumerate(sci_data):
+                for jj, im in enumerate(cube):
+                    revised_saturation_mask = self.revise_saturation(im,
+                                                        dq_bool_256[ii][jj],
+                                                        hdr=sci_headers[ii][0])
+                    dq_bool_256[ii][jj] = revised_saturation_mask.copy()
+
         # Only get bad pixels if they are going to be fixed.
         if not self.noFixPix:
             self.logger.info("Reading DQ array binary flags for bad pixels...")
@@ -562,10 +588,81 @@ class Pipeline(object):
             dq_bool_16 = np.zeros(dq_data.shape, dtype=bool)
             dq_bool_8192 = np.zeros(dq_data.shape, dtype=bool)
 
+        self.target_names = np.array(target_names)
+
         if scienceOnly:
             return sci_data, sci_headers, np.array(target_names)
         else:
             return sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, err_headers, dq_headers, np.array(target_names)
+
+
+    def revise_saturation(self, im, saturation_mask, hdr=None,
+                          saturation_value=None):
+        """
+        Check and revise the input saturation mask based on the actual value
+        of the pixels presumed to be saturated from the mask.
+
+        The default STIS saturation values are referenced from STScI
+        Instrument Science Report STIS 2015-06 (v1) "STIS CCD Saturation
+        Effects": https://www.stsci.edu/files/live/sites/www/files/home/hst/instrumentation/stis/documentation/instrument-science-reports/_documents/2015_06.pdf
+
+        Parameters
+        ----------
+        im : 2-d array, float
+            The science image.
+        saturation_mask : 2-d array, bool
+            Boolean saturation mask for the science image im.
+        hdr : dict-like FITS header, optional
+            Primary header for image im that contains the CCDGAIN key. The
+            default is None.
+        saturation_value : float or None, optional
+            The limiting value above which a pixel should be considered
+            saturated. The default is None, in which case a value will try
+            to be inferred from the header.
+
+        Returns
+        -------
+        2-d array
+            The revised saturation mask
+
+        """
+        if saturation_value is None:
+            if hdr is not None:
+                try:
+                    if self.instrument == 'stis':
+                        # This non-linear limits is the minimum of the range
+                        # 27,000 to 33,000 DN that varies across the CCD,
+                        # from "STIS CCD Saturation Effects" cited above.
+                        if hdr.get('CCDGAIN', -1) == 4:
+                            saturation_value = 27000
+                        # Also from "STIS CCD Saturation Effects" cited above.
+                        elif hdr.get('CCDGAIN', -1) == 1:
+                            saturation_value = 33000
+                except:
+                    pass
+
+        self.saturation_value = saturation_value
+
+        # Return the original saturation mask if no saturation value is given.
+        if saturation_value is None:
+            return saturation_mask
+
+        revised_saturation_mask = saturation_mask.copy()
+
+        N_revised = 0
+        wy, wx = np.where(saturation_mask)
+        for ii in range(len(wy)):
+            # Get values of the pixel of interest and its adjacent pixels.
+            # Apparently numpy already handles trying to index past the array
+            # length, so we only need to safely handle the negative index case.
+            yi_min = max(0, wy[ii]-2)
+            xi_min = max(0, wx[ii]-2)
+            neighbor_values = im[yi_min:wy[ii]+3, xi_min:wx[ii]+3]
+            if np.all(neighbor_values < 0.8*saturation_value):
+                revised_saturation_mask[wy[ii], wx[ii]] = False
+                N_revised += 1
+
+        return revised_saturation_mask
 
 
     def pixelfixing(self, data, dq_8192_mask=None, dq_masks=[],
@@ -872,6 +969,7 @@ class Pipeline(object):
                                                         finalYX=self.alignStar,
                                                         outputSize=matSize,
                                                         order=1, fill=-1e4)
+
                 # Collapse the masks across CRSPLITS to end up with one
                 # per FITS.
                 alignMasks += crsplitMask
@@ -1867,6 +1965,12 @@ class Pipeline(object):
         self.nSci = np.size(self.sciInds)
         self.nRef = np.size(self.refInds)
 
+        if self.psfRefName in ['', None]:
+            self.psfRefName = ','.join(self.target_names[self.refInds])
+
+        self.logger.info("Reference PSF names used: "\
+                         f"{self.target_names[self.refInds]}")
+
         # Force switch to ADI PSF subtraction if no reference images found.
         if self.nRef == 0:
             self.psfSubMode = 'adi'
@@ -1922,13 +2026,6 @@ class Pipeline(object):
 
             self.inputType = newSuffix
             self.fileList = np.asarray(x2dFileList, dtype='O')
-
-            # # Load the distortion-corrected fits as the working images.
-            # sci_data, sci_headers, targs = self.load_flt_imgs(self.fileList,
-            #                                                   plot_images=False,
-            #                                                   scienceOnly=True)
-            # self.allHdrs = sci_headers
-            # self.imgShape = np.array(sci_data[0][0].shape)
 
             sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, \
                 err_headers, dq_headers, targs = self.load_flt_imgs(plot_images=False,
