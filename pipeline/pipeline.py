@@ -32,7 +32,7 @@ from alicesaur.calibration.bad_pix import fix_bad_dq_knn, mask_bad_pix
 from alicesaur.calibration.distortion import correct_distortion
 from alicesaur.calibration.align import find_star_radon, shift_pix_to_pix
 from alicesaur.calibration.flux import convert_intensity
-from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
+from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis, clean_image_edges
 from alicesaur.improcess.manipulate import zero_pad
 from alicesaur.gaia.astrometry import main
 from alicesaur.gaia.gaia_utils import get_gaia_id
@@ -655,10 +655,10 @@ class Pipeline(object):
             # Get values of the pixel of interest and its adjacent pixels.
             # Apparently numpy already handles trying to index past the array
             # length, so we only need to safely handle the negative index case.
-            yi_min = max(0, wy[ii]-2)
-            xi_min = max(0, wx[ii]-2)
-            neighbor_values = im[yi_min:wy[ii]+3, xi_min:wx[ii]+3]
-            if np.all(neighbor_values < 0.8*saturation_value):
+            yi_min = max(0, wy[ii]-3)
+            xi_min = max(0, wx[ii]-3)
+            neighbor_values = im[yi_min:wy[ii]+4, xi_min:wx[ii]+4]
+            if np.all(neighbor_values < 0.68*saturation_value):
                 revised_saturation_mask[wy[ii], wx[ii]] = False
                 N_revised += 1
 
@@ -914,7 +914,8 @@ class Pipeline(object):
         return np.array(stars)
 
 
-    def align_imgs(self, imgs, indImg, masks=[], commonMask=None, pad=True,
+    def align_imgs(self, imgs, indImg, masks=[], commonMask=None,
+                   saturationMasks=None, pad=True,
                    starGuess=None, finalStarYX=None):
 
         # Find the occulted star's coordinates in every image.
@@ -950,25 +951,58 @@ class Pipeline(object):
 
         # Align and pad associated mask arrays as well.
         if commonMask is not None:
-            alignMasks = shift_pix_to_pix(commonMask, np.nanmean(stars, axis=0),
+            # Smooth the mask slightly to help the edges better track the
+            # interpolated images.
+            alignMasks = shift_pix_to_pix(gaussian_filter(commonMask, 0.5),
+                                          np.nanmean(stars, axis=0),
                                           finalYX=self.alignStar,
                                           outputSize=matSize,
-                                          order=1, fill=-1e4)
+                                          order=3, fill=-1e4)
+            # Sanitize the mask to repair interpolation errors.
+            alignMasks[alignMasks >= 0.02*-1e4] = 0
         else:
             alignMasks = np.zeros(imgs[ii][0].shape)
 
+        # Align the saturation masks.
+        if saturationMasks is not None:
+            crsplitMask = np.zeros(alignImgs[0].shape)
+            # Loops over the CRSPLITS.
+            for ii in tqdm(range(len(saturationMasks)), desc="Align saturation masks"):
+                # Skip CRSPLITS with no star measurement (can't shift it).
+                # Smooth the mask slightly to help the edges better track
+                # the interpolated images.
+                if np.all(np.isfinite(stars[ii])):
+                    crsplitMask += shift_pix_to_pix(gaussian_filter(saturationMasks[ii], 2.),
+                                                    stars[ii],
+                                                    finalYX=self.alignStar,
+                                                    outputSize=matSize,
+                                                    order=3, fill=-1e4)
+                    # Sanitize the mask to repair interpolation errors.
+                    crsplitMask[crsplitMask >= 0.02*-1e4] = 0
+
+            # Collapse the masks across CRSPLITS to end up with one
+            # per FITS.
+            alignMasks += crsplitMask
+
+        # Align other types of masks.
         if len(masks) > 0:
             # Loops over the mask type.
-            for jj in tqdm(range(len(masks)), desc="Align masks"):
+            for jj in tqdm(range(len(masks)), desc="Align other masks"):
                 crsplitMask = np.zeros(alignImgs[0].shape)
                 # Loop over the CRSPLITS.
                 for ii, msk in enumerate(masks[jj]):
                     # Skip CRSPLITS with no star measurement (can't shift it).
+                    # Smooth the mask slightly to help the edges better track
+                    # the interpolated images.
                     if np.all(np.isfinite(stars[ii])):
-                        crsplitMask += shift_pix_to_pix(masks[jj][ii], stars[ii],
+                        crsplitMask += shift_pix_to_pix(gaussian_filter(masks[jj][ii], 0.5),
+                                                        stars[ii],
                                                         finalYX=self.alignStar,
                                                         outputSize=matSize,
-                                                        order=1, fill=-1e4)
+                                                        order=3, fill=-1e4)
+# TEMP!!!
+                        # Sanitize the mask to repair interpolation errors.
+                        crsplitMask[crsplitMask >= 0.02*-1e4] = 0
 
                 # Collapse the masks across CRSPLITS to end up with one
                 # per FITS.
@@ -2073,32 +2107,21 @@ class Pipeline(object):
 # FITS cubes. This means the ERR and DQ arrays become out of alignment with
 # the science images after this stage.
 
-        # # Define common star center based on WCS estimate.
-        # # This is the point to which all images will be aligned.
-        # self.alignStar = np.round(self.starFromWCS, 0)
 
         # Align CRSPLIT exposures, if they are present.
         # Write aligned images to new alc.fits (if CTI-corrected) or alt.fits
         # files (if not CTI-corrected).
+        # Also align the related masks.
         self.starsAll = []
         self.starsOriginalAll = []
         self.alignStarOffsetsAll = []
         alignMasksAll = []
         if self.inputType in ['flt', 'flc', 'xft', 'xfc']:
             for ii in range(len(sci_data)):
-                # imgsPadded = self.pad_imgs(sci_data[ii], outputShape=(1100,1100), fill=0.)
-
-                # # Pop off "empty" images before alignment.
-                # empty_to_remove = []
-                # for jj in range(len(sci_data[ii])):
-                #     if np.all(np.isnan(sci_data[ii][jj])):
-                #         empty_to_remove.append(jj)
-                # for ind in empty_to_remove[::-1]:
-                #     sci_data[ii].pop(ind)
-
                 alignImgs, alignMasks = self.align_imgs(sci_data[ii],
-                                                    indImg=ii, masks=[saturationMask[ii]],
+                                                    indImg=ii, masks=[],
                                                     commonMask=occultMask,
+                                                    saturationMasks=saturationMask[ii],
                                                     pad=True,
                                                     starGuess=self.starFromWCS_list[ii],
                                                     finalStarYX=np.array([1024., 1024.]))
@@ -2119,9 +2142,6 @@ class Pipeline(object):
                 outPath = os.path.join(os.path.dirname(self.fileList[ii]),
                                        os.path.basename(self.fileList[ii]).replace(self.inputType, newSuffix))
 
-                # # Add ID suffix to output filename.
-                # outPath = os.path.splitext(outPath)[0] + self.cid + '.fits'
-
                 # # Reassemble aligned CRSPLIT images into a new cube with same
                 # # extensions as an flt.
                 # self.write_aligned_fits(list(sum(list(zip(sci_data[ii], err_data[ii], dq_data[ii])), ())),
@@ -2141,9 +2161,8 @@ class Pipeline(object):
                 # Update the file path and inputType to the new aligned FITS cube.
                 self.fileList[ii] = outPath
 
-# FIX ME!!! Convert all alignMasks to self.alignMasks.
-            alignMasks = np.array(alignMasksAll)
-            self.alignMasks = alignMasks
+# FIX ME!!! Convert all earlier alignMasks to self.alignMasks.
+            self.alignMasks = np.array(alignMasksAll)
 
             self.stars = np.mean(self.starsAll, axis=1)
             self.starsOriginal = np.nanmean(self.starsOriginalAll, axis=1)
@@ -2167,6 +2186,7 @@ class Pipeline(object):
             self.starsOriginal = np.array(self.starsOriginal)
             self.alignStarOffsets = self.stars - self.starsOriginal
 
+            # Align the masks.
             for ii in range(len(sci_data)):
                 # imgsPadded = self.pad_imgs(sci_data[ii], outputShape=(1100,1100), fill=0.)
                 alignMasks = shift_pix_to_pix(occultMask, self.starsOriginal[ii],
@@ -2174,9 +2194,8 @@ class Pipeline(object):
                                               outputSize=np.array([2048, 2048]),
                                               order=1, fill=-1e4)
                 alignMasksAll.append(alignMasks.copy())
-# FIX ME!!! Convert all alignMasks to self.alignMasks.
-            alignMasks = np.array(alignMasksAll)
-            self.alignMasks = alignMasks
+# FIX ME!!! Convert all earlier alignMasks to self.alignMasks.
+            self.alignMasks = np.array(alignMasksAll)
 
 
     # ========== BACKGROUND SUBTRACTION ========== #
@@ -2329,7 +2348,7 @@ class Pipeline(object):
     # FIX ME!!! May want to move this radial masking to the RDI PSF subtraction function
     # so it doesn't conflict with pyKLIP?
             # Mask out the occulted sections too, established earlier as very negative valued.
-            sourceMasks[ind][alignMasks[ind] < 0] = np.nan
+            sourceMasks[ind][self.alignMasks[ind] < 0] = np.nan
             # Now mask all of the excluded sources given in "exclude" json key.
             sourceMasks[ind] = mask_exclusions(mask=sourceMasks[ind],
                                        exclusions=exclusionsSci,
@@ -2369,7 +2388,7 @@ class Pipeline(object):
             # Add off-axis diffraction spike masks to the other masks.
             # IMPORTANT: cen here is in the padded image coordinate frame-- NOT the original.
             for excl in exclusionsSci.setdefault('spikes_yxr_anglesDeg', []):
-                maskSpikesOffaxis = mask_spikes_offaxis(np.zeros(alignMasks[ind].shape),
+                maskSpikesOffaxis = mask_spikes_offaxis(np.zeros(self.alignMasks[ind].shape),
                                                     excl,
                                                     cen=self.alignStar,
                                                     cenOffset=None,
@@ -2377,14 +2396,14 @@ class Pipeline(object):
                                                     spikeAngles=excl[3])
                 maskSpikesOffaxis *= -1e4
                 masks[ind][maskSpikesOffaxis < 0] = True
-                alignMasks[ind] += maskSpikesOffaxis
+                self.alignMasks[ind] += maskSpikesOffaxis
                 psfSubMasks[ind][maskSpikesOffaxis < 0] = True
                 sourceMasks[ind][maskSpikesOffaxis < 0] = True
 
             if self.debug:
                 plt.figure(4)
                 plt.clf()
-                plt.imshow(alignMasks[ind])
+                plt.imshow(self.alignMasks[ind])
                 plt.title("Occulter ('align') mask")
                 plt.draw()
                 plt.show()
@@ -2403,7 +2422,7 @@ class Pipeline(object):
                 if psfsubOnSpikesOnly:
                     psfSubMasks[ind] = np.zeros(psfSubMasks[ind].shape).astype(bool)
 
-                psfSubMasks[ind][alignMasks[ind] < 0] = np.nan
+                psfSubMasks[ind][self.alignMasks[ind] < 0] = np.nan
                 # Don't offset PA of reference mask because coords should
                 # already be given in rotated frame.
                 # Always offset the coordinates based on the new aligned star
@@ -2423,7 +2442,7 @@ class Pipeline(object):
                                                 paOffset=0, spikeAngles=self.spikeAngles)
         # ADI and all other non-RDI cases.
         else:
-            psfSubMasks_refs = alignMasks.copy()
+            psfSubMasks_refs = self.alignMasks.copy()
             # Lazy bookkeeping to convert occulter spike mask to boolean,
             # where masked elements are set to True.
             psfSubMasks_refs[psfSubMasks_refs >= 0] = 0
@@ -2606,8 +2625,8 @@ class Pipeline(object):
             IWA = 3.
             OWA = 200.
             # Mask out the occulters in the input images.
-            alignImgsMasked = self.workingImgs + alignMasks
-            alignImgsMasked[alignMasks < 0] = np.nan
+            alignImgsMasked = self.workingImgs + self.alignMasks
+            alignImgsMasked[self.alignMasks < 0] = np.nan
 
             stis_psfsub.do_klip_stis(targ, self.fileList[self.sciInds],
                 inputImgs=alignImgsMasked[self.sciInds], inputHdrs=None,
@@ -2685,7 +2704,7 @@ class Pipeline(object):
             # Apply mask for occulters and diffraction spikes to
             # PSF-subtracted images before the final collapse.
             for ii in range(len(psfSubImgs)):
-                aM = alignMasks[self.sciInds][ii].copy()
+                aM = self.alignMasks[self.sciInds][ii].copy()
                 if len(bgStarMasks) > 0:
                     aM[bgStarMasks[ii]] = -1
                 aM[aM >= 0] = 0
