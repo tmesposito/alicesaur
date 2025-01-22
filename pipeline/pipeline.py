@@ -32,7 +32,7 @@ from alicesaur.calibration.bad_pix import fix_bad_dq_knn, mask_bad_pix
 from alicesaur.calibration.distortion import correct_distortion
 from alicesaur.calibration.align import find_star_radon, shift_pix_to_pix
 from alicesaur.calibration.flux import convert_intensity
-from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis, clean_image_edges
+from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
 from alicesaur.improcess.manipulate import zero_pad
 from alicesaur.gaia.astrometry import main
 from alicesaur.gaia.gaia_utils import get_gaia_id
