@@ -2698,7 +2698,7 @@ class Pipeline(object):
                     self.logger.info(f"Gaia X: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
             else:
                 self.logger.error("*** FAILED to measure Gaia astrometry: "\
-                      f"invalid Gaia ID number for target ({gaiaIDNumber})\n")
+                      f"invalid Gaia ID number for target ({self.targSimbad})\n")
 
         if psfSubMode.lower() in ["adi", "rdi"]:
             # Apply mask for occulters and diffraction spikes to

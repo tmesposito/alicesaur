@@ -197,14 +197,39 @@ def get_gaia_id(simbadName):
 
     from astroquery.simbad import Simbad
     result_table = Simbad.query_objectids(simbadName)
-    gaiaIDs = [id for id in result_table['ID'] if 'Gaia' in id]
 
-    # Prefer Gaia DR3 ID if exists.
-    if len(gaiaIDs) > 0:
-        for dr in ['DR3', 'DR2']:
-            wh = [dr in id for id in gaiaIDs]
-            if np.any(wh):
-                gaiaID = np.array(gaiaIDs)[wh][0]
-                return gaiaID
+    # If the first attempt at querying for the target name in SIMBAD fails,
+    # try a couple of other name variations.
+    if result_table is None:
+        result_table = Simbad.query_objectids(simbadName.replace('-', ' '))
+
+    if result_table is None:
+        if simbadName[:2] == 'V-':
+            result_table = Simbad.query_objectids(simbadName[2:].replace('-', ' '))
+
+    if result_table is None:
+        print('No Gaia ID found from SIMBAD query for target '\
+              f'name {simbadName}. Gaia astrometry cannot be '\
+              'performed.')
+        return None
+
+    if 'ID' in result_table.keys():
+        gaiaIDs = [id for id in result_table['ID'] if 'Gaia' in id]
+
+        # Prefer Gaia DR3 ID if exists.
+        if len(gaiaIDs) > 0:
+            for dr in ['DR3', 'DR2']:
+                wh = [dr in id for id in gaiaIDs]
+                if np.any(wh):
+                    gaiaID = np.array(gaiaIDs)[wh][0]
+                    return gaiaID
+        else:
+            print('No Gaia ID found from SIMBAD query for target '\
+                  f'name {simbadName}. Gaia astrometry cannot be '\
+                  'performed.')
+            return None
     else:
+        print('No Gaia ID found from SIMBAD query for target '\
+              f'name {simbadName}. Gaia astrometry cannot be '\
+              'performed.')
         return None
