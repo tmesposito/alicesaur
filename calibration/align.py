@@ -96,6 +96,8 @@ def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3,
     sh_x = finalYX[1] - refYX[1]
 
     # Shift the array to put coords at new_cen.
+    # scipy.ndimage.interpolation.shift uses a spline interpolation of the
+    # requested order.
     imgShift = interpolation.shift(mat, [sh_y, sh_x], order=order,
                                    mode='constant', cval=fill)
 

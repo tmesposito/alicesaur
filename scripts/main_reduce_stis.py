@@ -54,7 +54,8 @@ if __name__ == "__main__":
                         default=None, type=float, nargs='?',
                         help=desc)
 
-    desc = 'Target name (e.g., HD-32297)'
+    desc = 'Target name (e.g., HD-32297). For names starting with special characters '\
+        'like a - (dash), escape them with a leading forward slash like \-AU-MIC'
     parser.add_argument('--targ', metavar='targ',
                         default="", type=str, nargs='?',
                         help=desc)

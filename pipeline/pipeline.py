@@ -66,6 +66,8 @@ class Pipeline(object):
     inputType = 'flt'
     # Default to STIS instrument.
     instrument = 'stis'
+    # Observation mode; typically the occulter position.
+    obsMode = ''
     # Image plate scale.
     pscale = 0.0507 # [arcsec/pixel]
     # Image dimensions.
@@ -89,6 +91,9 @@ class Pipeline(object):
         for key, val in kwargs.items():
             setattr(self, key, val)
 
+        # Enforce lowercase obsMode.
+        self.obsMode = self.obsMode.lower()
+
         if hasattr(self, 'dataDir'):
             if self.dataDir is None:
                 # Invent a data directory from the target name,
@@ -96,11 +101,11 @@ class Pipeline(object):
                 if len(self.pids) > 0:
                     self.dataDir = os.path.join(os.path.realpath('.'),
                                     f'{self.targ}_{self.instrument.lower()}_{self.pids[0]}',
-                                    self.obsMode.lower())
+                                    self.obsMode)
                 else:
                     self.dataDir = os.path.join(os.path.realpath('.'),
                                     f'{self.targ}_{self.instrument.lower()}',
-                                    self.obsMode.lower())
+                                    self.obsMode)
 
             # Ensure trailing slash in data directory name.
             self.dataDir = os.path.join(os.path.expanduser(self.dataDir),'')
@@ -245,7 +250,7 @@ class Pipeline(object):
         self.info.setdefault('psfRefName', '')
         self.info.setdefault('obsLogPath', '')
         self.info.setdefault('diskPA_deg', 0.)
-        self.info.setdefault(self.obsMode.lower(), {})
+        self.info.setdefault(self.obsMode, {})
         # Background sampling region centers for science and reference images.
         self.info[self.obsMode].setdefault('bgCen_yx', None)
         self.info[self.obsMode].setdefault('bgCenRef_yx', None)
@@ -257,7 +262,7 @@ class Pipeline(object):
         # Background sampling radius [pix]
         self.info[self.obsMode].setdefault('bgRadius', 40)
         # Diffraction spike mask width [pix]
-        if 'bar' in self.obsMode.lower():
+        if 'bar' in self.obsMode:
             self.info[self.obsMode].setdefault('spWidth', 8)
         else:
             self.info[self.obsMode].setdefault('spWidth', 12)
