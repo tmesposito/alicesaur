@@ -52,26 +52,30 @@ A few dependencies cannot be pip installed. For these, do the following:
    ```
 3. Go to the github repository for STScI's STIS data reduction notebook at https://github.com/spacetelescope/STIS-Notebooks/tree/main/drizpac_notebook and download the single file [copy_files.py](https://github.com/spacetelescope/STIS-Notebooks/blob/main/drizpac_notebook/copy_files.py) to the same parent directory that houses your local alicesaur repository.
 
-### Install CALSTIS executables
-Optional calibration steps within alicesaur for charge transfer inefficiency (CTI) correction and geometric distortion (x2d) correction rely on C executables from older CALSTIS code. At the moment, the easiest way to install them is to ask the alicesaur developers for copies.
-
-1. Once you have them, place all the cs#.e files into your environment's PATH (there should be eight files). The suggested location is inside your environment's `bin/` directory, but any path that you then add to the environment's PATH variable should work.
-
-2. Next, on some operating systems such as MacOS, you will need to adjust your security preferences to "trust" two of these executables, as they are not recognized as safe by default. One of the following approaches should work on Mac to solve the issue. You may or may not need to find similar workarounds for other OS's.
-1. Via command line, run
+4. Install STScI's `hstcal` package to use the CALSTIS executables contained therein. If you are using a conda virtual environment, you can try this via:
    ```
-   xattr -dr com.apple.quarantine "/your/path/here/bin/cs0.e"
+   conda install -c conda-forge hstcal==X.Y.Z
    ```
-   Repeat this for each `cs#.e` file.
-2. Try to run the executable, either by calling it individually from the command line or by running the alicesaur pipeline. When an error message appears saying the executable can't be run because it is not trusted, open System Preferences, go to Privacy & Security, select "Allow applications downloaded from App Store and identified developers", then below that where there is a message that says "cs#.e was blocked from used because it is not from an identified developer" click the "Allow anyway" button. You will need to repeat this for each cs#.e file, which may require running the pipeline multiple times (if you chose that method). Fortunately, you only need to do this entire process once.
+   where the X.Y.Z is the desired version number (choose the latest available).
+
+   Otherwise, for those not using conda, you can install it from source by cloning the github repository:
+   ```
+   git clone git@github.com:spacetelescope/hstcal.git
+   ```
+   You will then need to follow the instructions in the hstcal/INSTALL.md file to build the package and its executables.
+
+6. Add the full path to the hstcal `bin` directory, wherever you installed it, to your environment's PATH variable. Example for bash:
+   ```
+   export PATH=/$HOME/src/hstcal/bin:$PATH
+   ```
 
 ### Add alicesaur to your PYTHONPATH
 To run, the parent directory containing your local alicesaur repository must be in your environment's PYTHONPATH. To add it temporarily for your currently active shell, you can run either:
-(for a bash shell)
+(for a bash or zsh shell)
 ```
 export PYTHONPATH=/path/to/parent/directory:$PYTHONPATH
 ```
-or (for a csh shell like csh, tcsh, or zsh)
+or (for a csh shell like csh or tcsh)
 ```
 setenv PYTHONPATH /path/to/parent/directory:$PYTHONPATH
 ```
