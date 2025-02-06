@@ -5,6 +5,7 @@ import platform
 import sys
 import shutil
 import pdb
+import gc
 import logging
 import getpass
 import json
@@ -369,7 +370,7 @@ class Pipeline(object):
             pass
         elif suffix == 'sx2':
             for ii, ff in enumerate(self.fileList):
-                with fits.open(ff) as hdu:
+                with fits.open(ff, memmap=True) as hdu:
                     imgs = [hdu[jj].data for jj in range(len(hdu))]
                     hdrs = [hdu[jj].header for jj in range(len(hdu))]
                     imgsHdrs[0].append(imgs)
@@ -391,7 +392,7 @@ class Pipeline(object):
         target_names = []
 
         if len(self.fileList) == 0:
-            self.logger.error(f"*** File list is empty! Nothing to process. "\
+            self.logger.error("*** File list is empty! Nothing to process. "\
                               "Exiting. ***\n")
             sys.exit(0)
 
@@ -405,7 +406,7 @@ class Pipeline(object):
             crsplits_dq = []
             crsplits_hdrs_dq = []
             crsplits_hdrs_all = []
-            with fits.open(file_name) as hdu_list:
+            with fits.open(file_name, memmap=True) as hdu_list:
 
                 # Check image observation date is within allowed date range.
                 if self.date_incl_start is not None:
@@ -508,51 +509,45 @@ class Pipeline(object):
                         if len(dq_headers[ii]) > 0:
                             dq_headers[ii].append({'EXTNAME':'DUMMY'})
 
-# # FIX ME!!! This trims the cubes to all have the minimum number of CRSPLITS
-# # found in the input images. It throws away integration time as a result.
-# # Find a better way.
-#             min_crsplits = min(n_crsplits)
-#             self.logger.warning(f"Trimming extra CRSPLITS to reach {min_crsplits} as needed")
-#             for ii, ncr in enumerate(n_crsplits):
-#                 if ncr > min_crsplits:
-#                     sci_data[ii] = sci_data[ii][:min_crsplits]
-#                     err_data[ii] = err_data[ii][:min_crsplits]
-#                     dq_data[ii] = dq_data[ii][:min_crsplits]
-#                     all_headers[ii] = all_headers[ii][:3*min_crsplits+1]
-#                     sci_headers[ii] = sci_headers[ii][:min_crsplits+1]
-#                     err_headers[ii] = err_headers[ii][:min_crsplits]
-#                     dq_headers[ii] = dq_headers[ii][:min_crsplits]
-
+        # NOTE: Converting to arrays here is memory intensive -- could either
+        # keep as lists (gets tricky later) or maybe use dtype=object?
         sci_data = np.array(sci_data)
         err_data = np.array(err_data)
         dq_data = np.array(dq_data)
 
-        if (not self.noMaskSaturation) | (not self.noFixPix):
-            self.logger.info("Converting DQ arrays to binary...")
-            dq_binary = np.empty(dq_data.shape, dtype='U14')
+        # if (not self.noMaskSaturation) | (not self.noFixPix):
+        #     self.logger.info("Converting DQ arrays to binary...")
+        #     dq_binary = np.empty(dq_data.shape, dtype='U14')
 
-            # Convert the DQ array integers to binary strings.
-            # Do this only once, because it's slow.
-            for index in np.ndindex(dq_data.shape):
-                dq_binary[index] = f"{dq_data[index]:014b}"
+        #     # Convert the DQ array integers to binary strings.
+        #     # Do this only once, because it's slow.
+        #     for index in np.ndindex(dq_data.shape):
+        #         dq_binary[index] = f"{dq_data[index]:014b}"
+        # else:
+        #     dq_binary = None
 
         # Convert DQ values to binary strings to read the individual flags.
         # Only get saturated pixels if they are going to be fixed.
         if not self.noMaskSaturation:
             self.logger.info("Reading DQ array binary flags for saturation...")
-            dq_bool_256 = np.zeros(dq_binary.shape, dtype=bool)
-            for index in np.ndindex(dq_binary.shape):
-                # Binary string is read from the right, so -9th element in from
-                # the right is the 256 bit. 0th element is the 8192 bit.
-                dq_bool_256[index] = dq_binary[index][-9] == '1'
 
+            # Identify the pixels with DQ flag 256.
             if dq_data.size > 0:
+                # 256 == 2**8, so check that bit.
+                dq_bool_256 = (dq_data & (1 << 8)) != 0
+
                 n_dq_256 = np.sum(np.sum(dq_bool_256, axis=3), axis=2)
                 self.logger.info(f"\nDQ 256 pixels (saturated) by FITS (row) and CRSPLIT (column):\n{n_dq_256}")
 
-                self.logger.info("DQ flag : total count in dataset")
-                for flag in np.unique(dq_binary):
-                    self.logger.info(f"{int(flag, 2)} : {np.sum(dq_binary==flag)}")
+                # self.logger.info("DQ flag : total count in dataset")
+                # flags = []
+                # for dqs in dq_binary:
+                #     flags += np.unique(dqs).tolist()
+                # unique_flags = np.unique(flags)
+                # for flag in unique_flags:
+                #     self.logger.info(f"{int(flag, 2)} : {np.sum(dq_binary==flag)}")
+            else:
+                dq_bool_256 = np.zeros(dq_data.shape, dtype=bool)
         else:
             dq_bool_256 = np.zeros(dq_data.shape, dtype=bool)
 
@@ -570,15 +565,10 @@ class Pipeline(object):
         if not self.noFixPix:
             self.logger.info("Reading DQ array binary flags for bad pixels...")
 
-            dq_bool_16 = np.zeros(dq_binary.shape, dtype=bool)
-            dq_bool_8192 = dq_bool_16.copy()
-            for index in np.ndindex(dq_binary.shape):
-                # Binary string is read from the right, so -5th element in from the
-                # right is the 16 bit. 0th element is the 8192 bit.
-                dq_bool_16[index] = dq_binary[index][-5] == '1'
-                dq_bool_8192[index] = dq_binary[index][0] == '1'
-
+            # Identify the pixels with DQ flags 16 and/or 8192.
             if dq_data.size > 0:
+                dq_bool_16 = (dq_data & (1 << 4)) != 0
+                dq_bool_8192 = (dq_data & (1 << 13)) != 0
 
                 n_dq_16 = np.sum(np.sum(dq_bool_16, axis=3), axis=2)
                 n_dq_8192 = np.sum(np.sum(dq_bool_8192, axis=3), axis=2)
@@ -586,14 +576,24 @@ class Pipeline(object):
                 self.logger.info(f"\nDQ 16 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_16}")
                 self.logger.info(f"\nDQ 8192 pixels by FITS (row) and CRSPLIT (column):\n{n_dq_8192}")
 
-                self.logger.info("DQ flag : total count in dataset")
-                for flag in np.unique(dq_binary):
-                    self.logger.info(f"{int(flag, 2)} : {np.sum(dq_binary==flag)}")
+                # self.logger.info("DQ flag : total count in dataset")
+                # flags = []
+                # for dqs in dq_binary:
+                #     flags += np.unique(dqs).tolist()
+                # unique_flags = np.unique(flags)
+                # for flag in unique_flags:
+                #     self.logger.info(f"{int(flag, 2)} : {np.sum(dq_binary==flag)}")
+            else:
+                dq_bool_16 = np.zeros(dq_data.shape, dtype=bool)
+                dq_bool_8192 = np.zeros(dq_data.shape, dtype=bool)
         else:
             dq_bool_16 = np.zeros(dq_data.shape, dtype=bool)
             dq_bool_8192 = np.zeros(dq_data.shape, dtype=bool)
 
         self.target_names = np.array(target_names)
+
+        # Clean up a little (probably not doing much).
+        gc.collect()
 
         if scienceOnly:
             return sci_data, sci_headers, np.array(target_names)
@@ -1506,6 +1506,8 @@ class Pipeline(object):
                 hdu.header.add_history('Created by {}'.format(getpass.getuser()))
             except:
                 hdu.header.add_history('Created by unknown user')
+        hdu.header['DATE'] = (datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                              'date (UTC) this file was written')
         hdu.header['ALCSRVER'] = (self.version, 'Alicesaur pipeline version number')
         hdu.header['TARGNAME'] = (self.targ)
         hdu.header['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
@@ -1667,6 +1669,8 @@ class Pipeline(object):
                 newPriHdr.add_history('Created by {}'.format(getpass.getuser()))
             except:
                 newPriHdr.add_history('Created by unknown user')
+        newPriHdr['DATE'] = (datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                             'date (UTC) this file was written')
         newPriHdr['ALCSRVER'] = (self.version, 'Alicesaur pipeline version number')
         newPriHdr['TARGNAME'] = (self.targ)
         newPriHdr['PSFNAME'] = (self.psfRefName, 'Reference PSF name')
@@ -1765,7 +1769,7 @@ class Pipeline(object):
 
         self.logger.info(f"{filetype} SAVED as {self.dataDir + saveName}")
 
-        return
+        return self.dataDir + saveName
 
 
     def post_reduction_analysis(self, im):
@@ -2680,7 +2684,7 @@ class Pipeline(object):
         # Perform astrometry on occulted primary using background star
         # Gaia positions.
         if self.do_gaia:
-            self.logger.info("*** Running GAIA ASTROMETRY thingy ***\n")
+            self.logger.info("*** Running GAIA ASTROMETRY thingy on individual PSF-subtracted images ***\n")
             self.targSimbad = utils.format_target_name(self.targ)
             gaiaID = get_gaia_id(self.targSimbad)
             if gaiaID is not None:
@@ -2700,7 +2704,7 @@ class Pipeline(object):
                                     exclude_extra=[], im=img, hdr=self.sciHdrs[ii][1],
                                     out_dir=self.dataDir)
                     all_gaia_out.append(gaia_out)
-                    self.logger.info(f"Gaia X: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
+                    self.logger.info(f"PSF-sub image {ii} Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
             else:
                 self.logger.error("*** FAILED to measure Gaia astrometry: "\
                       f"invalid Gaia ID number for target ({self.targSimbad})\n")
