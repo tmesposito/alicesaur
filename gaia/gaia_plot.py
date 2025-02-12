@@ -18,9 +18,9 @@ def plot_overview(im, x, y, source_id, exclude_id, outname='gaia_overview'):
     # Loop through each Gaia source and plot
     for j in range(0, len(x)):
         if source_id[j] in exclude_id:
-            marker, mec = 'x', 'red'
+            marker, mec = 'x', 'm'
         else:
-            marker, mec = 'o', 'green'
+            marker, mec = 'o', 'c'
 
         ax.plot(x[j], y[j], marker, mec=mec, ms=5, mew=0.5, mfc='None')
         ax.annotate(str(j), xy=(x[j], y[j]), xycoords='data', color=mec, xytext=(4, 4), textcoords='offset points', fontsize=8)

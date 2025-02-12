@@ -1,8 +1,8 @@
 import numpy as np
 
-from astropy.coordinates import solar_system_ephemeris
-from astropy.coordinates import get_body_barycentric
 from astropy import time
+from astropy.coordinates import get_body_barycentric
+from astropy.io import fits
 
 def gaia_correlated_variates(astrometry, error, correlation, n=int(1e6)):
 
@@ -233,3 +233,20 @@ def get_gaia_id(simbadName):
               f'name {simbadName}. Gaia astrometry cannot be '\
               'performed.')
         return None
+
+
+def add_header(filepath, x_gaia, y_gaia, x_err_gaia, y_err_gaia):
+
+    with fits.open(filepath, mode='update') as ff:
+        hdr = ff[0].header
+
+        hdr['GAIACENX'] = x_gaia
+        hdr['GAIACENY'] = y_gaia
+        hdr['GAIAERRX'] = x_err_gaia
+        hdr['GAIAERRY'] = y_err_gaia
+
+        ff.flush()
+
+    print("Updated header with Gaia center values")
+
+    return
