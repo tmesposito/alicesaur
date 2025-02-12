@@ -165,10 +165,23 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     w = WCS(hdr)
     ref_pos = w.pixel_to_world(hdr['CRPIX1'], hdr['CRPIX2'])
     guess_ps = np.mean([x.to(u.mas).value for x in w.proj_plane_pixel_scales()])
-    guess_tn = hdr['ORIENTAT']*np.pi/180.0
+    guess_tn = hdr.get('ORIENTAT', 0.)*np.pi/180.0
 
     # Exposure mid-point in decimal years
-    t_hst = time.Time(hdr['EXPSTART'] + (hdr['EXPTIME']/86400.0)/2., format='mjd').decimalyear
+    if ("DATE-MID" in hdr.keys()) and ("TIME-MID" in hdr.keys()):
+        if "T" in hdr['DATE-MID']:
+            t_hst = time.Time(f"{hdr['DATE-MID']}", format='isot', scale='utc').decimalyear
+        else:
+            t_hst = time.Time(f"{hdr['DATE-MID']}", format='iso', scale='utc').decimalyear
+    else:
+        try:
+            t_hst = time.Time(hdr['EXPSTART'] + (hdr['EXPTIME']/86400.0)/2., format='mjd').decimalyear
+        except:
+            if "T" in hdr['DATE-OBS']:
+                t_hst = (time.Time(hdr['DATE-OBS'], format='isot', scale='utc') + (time.Time(['DATE-END'], format='isot', scale='utc') - time.Time(hdr['DATE-OBS'], format='isot', scale='utc'))).decimalyear
+            else:
+                t_hst = (time.Time(hdr['DATE-OBS'], format='iso', scale='utc') + (time.Time(['DATE-END'], format='iso', scale='utc') - time.Time(hdr['DATE-OBS'], format='iso', scale='utc'))).decimalyear
+
 
 
     '''
