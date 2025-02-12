@@ -8,13 +8,14 @@ import numpy as np
 import pandas as pd
 import os
 
-def load_fits_data(self):
+
+def load_fits_data(dataDir):
     """
     Loads the data from the final FITS image in the specified directory.
     """
-    for filename in os.listdir(self.dataDir):
+    for filename in os.listdir(dataDir):
         if filename.startswith('final_') and filename.endswith('.fits'):
-            file_path = os.path.join(self.dataDir, filename)
+            file_path = os.path.join(dataDir, filename)
             with fits.open(file_path) as hdul:
                 data_cube = hdul[0].data
                 # If there are multiple data slices, use the first.
@@ -65,27 +66,35 @@ def masked_pixels_coords(seg_map, csv_file_path='masked_pixel_yx.csv'):
 
     all_pixels = np.argwhere(seg_map.data == 1)
     df = pd.DataFrame(all_pixels, columns=['y', 'x'])
-    df.to_csv(csv_file_path, index=False)
-    print(f"Saved masked pixel coordinates to {csv_file_path}")
+
+    if csv_file_path is not None:
+        df.to_csv(csv_file_path, index=False)
+        print(f"Saved masked pixel coordinates to {csv_file_path}")
+
+    return df
 
 def save_seg_map_as_fits(seg_map, original_filename, output_directory='.'):
 
-    output_file = f"segmap_{original_filename.split('final_')[1]}"
+    output_file = f"segmap_{original_filename}"
     output_path = os.path.join(output_directory, output_file)
     hdu = fits.PrimaryHDU(seg_map.data)
     hdu.writeto(output_path, overwrite=True)
     print(f"Segmentation map saved as {output_path}")
 
-def main_masking(self):
+def main_masking(data=None, dataDir='.', output_filename='image'):
 
-    data, original_filename = load_fits_data(self)
+    if data is None:
+        data, original_filename = load_fits_data(dataDir=dataDir)
+        output_filename = original_filename
+
     if data is not None:
         final_data, threshold = subtract_background(data)
         seg_map = process_data(final_data, threshold)
         seg_map = exclude_center_from_segmentation(seg_map, data)
-        csv_path = os.path.join(self.dataDir, 'masked_pixel_yx.csv')
+        csv_path = os.path.join(dataDir, f'masked_pixel_yx_{output_filename}.csv')
         masked_pixels_coords(seg_map, csv_path)
-        save_seg_map_as_fits(seg_map, original_filename, output_directory=self.dataDir)
+        save_seg_map_as_fits(seg_map, output_filename,
+                             output_directory=dataDir)
         return seg_map
     else:
         return None

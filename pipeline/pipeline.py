@@ -33,12 +33,12 @@ from alicesaur.calibration.bad_pix import fix_bad_dq_knn, mask_bad_pix
 from alicesaur.calibration.distortion import correct_distortion
 from alicesaur.calibration.align import find_star_radon, shift_pix_to_pix
 from alicesaur.calibration.flux import convert_intensity
-from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
-from alicesaur.improcess.manipulate import zero_pad
-from alicesaur.gaia.astrometry import main
-from alicesaur.gaia.gaia_utils import get_gaia_id
-from alicesaur.plot.disk_plot import plot_radprof_1d
 from alicesaur.improcess import astrosniff
+from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
+from alicesaur.improcess.manipulate import zero_pad, rotate_wcs
+from alicesaur.gaia.astrometry import main
+from alicesaur.gaia.gaia_utils import get_gaia_id, add_header
+from alicesaur.plot.disk_plot import plot_radprof_1d
 
 
 # Set matplotlib backend based on OS.
@@ -335,13 +335,14 @@ class Pipeline(object):
             self.logger.warning(f"*** NO FITS files found at {self.dataDir + '*_' + suffix +'.fits'} *** !!\n")
         
 
-    def make_star_mask(self):
+    def make_star_mask(self, im=None, output_filename='image'):
         """
         Execute astrosniff and return the mask 2D array.
         """
         self.logger.info("Starting masking process...")
         try:
-            seg_map = astrosniff.main_masking(self)
+            seg_map = astrosniff.main_masking(data=im, dataDir=self.dataDir,
+                                              output_filename=output_filename)
             if seg_map is not None:
                 self.logger.info("Auto star masking process completed successfully.")
             else:
@@ -703,7 +704,7 @@ class Pipeline(object):
 
         # Then fix all other DQ flags.
         for dqm in dq_masks:
-            if data.ndim > 3:
+            if (dqm is not None) and (np.size(dqm) > 0) and (data.ndim > 3):
                 for ii, da in tqdm(enumerate(data_fixed), desc="Fixing other DQ flagged bad pixels"):
                     for jj in range(da.shape[0]):
                         data_fixed[ii][jj] = fix_bad_dq_knn(da[jj],
@@ -1187,7 +1188,6 @@ class Pipeline(object):
 
             self.sciHdrs = [self.allHdrs[ind] for ind in self.sciInds]
             self.refHdrs = [self.allHdrs[ind] for ind in self.refInds]
-
             # for ii in self.sciInds:
             #     for jj, hdr in enumerate(self.allHdrs[ii]):
             #         if 'CRPIX1' in hdr.keys():
@@ -1616,7 +1616,8 @@ class Pipeline(object):
         return
 
 
-    def save_psfsub_to_fits(self, data, imType, unit, cid=''):
+    def save_psfsub_to_fits(self, data, imType, unit, cid='',
+                            headers=None):
         """
         imType: str
             Either 'final' for the collapsed final image, or 'psfcube' for the
@@ -1655,12 +1656,36 @@ class Pipeline(object):
                     'post-combine radial profile subtraction; Index 2 = no '\
                     'radial profile subtractions at all.'
 
-        if np.array(data).ndim > 3:
+        # Get the date and time information from the input headers.
+        try:
+            tStart = self.exposure_start_dates[0]
+            mjdStart = tStart.utc.mjd
+            dateStart = tStart.utc.isot
+            timeStart = dateStart.split('T')[-1]
+        except:
+            mjdStart = None
+            dateStart, timeStart = None, None
+        try:
+            tEnd = self.exposure_start_dates[-1] + TimeDelta(self.exptimes_s[-1], format='sec')
+            mjdEnd = tEnd.utc.mjd
+            dateEnd = tEnd.utc.isot
+            timeEnd = dateEnd.split('T')[-1]
+        except:
+            mjdEnd= None
+            dateEnd, timeEnd = None, None
+        try:
+            mjdMid = 0.5*(mjdStart + mjdEnd)
+            dateMid = Time(mjdMid, format='mjd', scale='utc').utc.isot
+            timeMid = dateMid.split('T')[-1]
+        except:
+            mjdMid = None
+            dateEnd, timeEnd = None, None
+
+        if (np.array(data).ndim > 3) or (imType in ['final']):
             hdul = fits.HDUList()
             priHdu = fits.PrimaryHDU()
             newPriHdr = priHdu.header
             newPriHdr['FILENAME'] = os.path.basename(saveName)
-            hdul.append(fits.PrimaryHDU(header=newPriHdr))
         else:
             hdu = fits.PrimaryHDU(data=np.array(data).astype('float32'))
             newPriHdr = hdu.header
@@ -1683,6 +1708,19 @@ class Pipeline(object):
         newPriHdr['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
         newPriHdr['ORIGCENY'] = (np.nanmean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
         newPriHdr['ORIGCENX'] = (np.nanmean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
+        # Add dates.
+        if dateStart is not None:
+            newPriHdr['DATE-OBS'] = (dateStart, "UT date observation start (yyyy-mm-ddThh:mm:ss)")
+            newPriHdr['TIME-OBS'] = (timeStart, "UT time of start of observation (hh:mm:ss)")
+            newPriHdr['MJD-OBS'] = (mjdStart, "Modified Julian Date of start of observation")
+        if dateMid is not None:
+            newPriHdr['DATE-MID'] = (dateMid, "UT date observation midpoint (yyyy-mm-ddThh:mm:ss)")
+            newPriHdr['TIME-MID'] = (timeMid, "UT time of midpoint of observation (hh:mm:ss)")
+            newPriHdr['MJD-MID'] = (mjdMid, "Modified Julian Date of midpoint of observation")
+        if dateEnd is not None:
+            newPriHdr['DATE-END'] = (dateEnd, "UT date observation end (yyyy-mm-ddThh:mm:ss)")
+            newPriHdr['TIME-END'] = (timeEnd, "UT time of end of observation (hh:mm:ss)")
+            newPriHdr['MJD-END'] = (mjdEnd, "Modified Julian Date of end of observation")
         newPriHdr['TEXPTIME'] = (np.sum(self.exptimes_s), 'Total combined integration time in s')
         newPriHdr['BUNIT'] = (self.bunit, 'brightness units')
         newPriHdr['PHOTFLAM'] = (self.photflam_avg, 'inverse sensitivity, ergs/s/cm2/Ang per count/s')
@@ -1718,6 +1756,11 @@ class Pipeline(object):
         newPriHdr['PSFRIN'] = (self.exclusionsSci.get('r_in', np.nan), 'PSF subtraction inner radius (pix)')
         newPriHdr['PSFROUT'] = (self.exclusionsSci.get('r_out', np.nan), 'PSF subtraction outer radius (pix)')
         newPriHdr['RADPROFS'] = (self.subRadProf, 'Residual radial profile subtracted?')
+
+        # Insert the header keys passed in by argument.
+        if headers is not None:
+            newPriHdr.update(headers)
+
         try:
             newPriHdr.add_comment('Science images used: '\
                                   f'{[os.path.basename(fp) for fp in self.fileList[self.sciInds]]}')
@@ -1753,19 +1796,23 @@ class Pipeline(object):
         except:
             newPriHdr.add_comment('Failed to comment on constituent image exposure times.')
 
-        if np.array(data).ndim > 3:
+        if (np.array(data).ndim > 3) or (imType in ['final']):
+            hdul.append(fits.PrimaryHDU(header=newPriHdr))
             # Create headers for all data extensions.
             for ii, da in enumerate(data):
                 # if (np.all(np.isnan(da)) | np.all(da == 0)):
                 #     continue
                 # Enforce data types to stabilize file size.
-                hdul.append(fits.ImageHDU(data=np.array(da).astype('float32'), header=newPriHdr.copy()))
+                hdul.append(fits.ImageHDU(data=np.array(da).astype('float32'),
+                                          header=newPriHdr.copy(),
+                                          name='SCI',
+                                          ver=ii+1))
                 hdr = hdul[-1].header
                 if ii == 0:
                     hdr['FILETYPE'] = ('Final combined PSF-subtracted image')
+            hdul.writeto(self.dataDir + saveName, overwrite=True)
         else:
             hdu.writeto(self.dataDir + saveName, overwrite=True)
-
 
         self.logger.info(f"{filetype} SAVED as {self.dataDir + saveName}")
 
@@ -1932,16 +1979,17 @@ class Pipeline(object):
             return
 
         if self.inputType in ['flt', 'flc', 'xft', 'xfc', 'axt', 'axc']:
-            sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, \
+            self.workingImgs, err_data, dq_data, dq_bool_16, dq_bool_256, \
+                dq_bool_8192, all_headers, sci_headers, \
                 err_headers, dq_headers, targs = self.load_flt_imgs(plot_images=False,
                                                                     scienceOnly=False)
             # Exit if no images were loaded.
-            if len(sci_data) == 0:
+            if len(self.workingImgs) == 0:
                 self.logger.error("*** NO IMAGES WERE LOADED. Aborting.")
                 return
 
             self.allHdrs = all_headers
-            self.imgShape = np.array(sci_data[0][0].shape)
+            self.imgShape = np.array(self.workingImgs[0][0].shape)
             try:
                 for hdr in sci_headers[0]:
                     if (hdr.get('EXTNAME', '') == 'SCI') and \
@@ -1967,18 +2015,18 @@ class Pipeline(object):
             # Fix bad pixels based on data quality flags from FITS.
             if not self.noFixPix:
                 if self.fix_dq_16:
-                    sci_data = self.pixelfixing(sci_data,
+                    self.workingImgs = self.pixelfixing(self.workingImgs,
                                                 dq_8192_mask=dq_8192_mask,
                                                 dq_masks=[dq_bool_16],
                                                 fix_other=True, verbose=True)
                 else:
-                    sci_data = self.pixelfixing(sci_data,
+                    self.workingImgs = self.pixelfixing(self.workingImgs,
                                                 dq_8192_mask=dq_8192_mask,
                                                 dq_masks=[],
                                                 fix_other=True, verbose=True)
                 # Overwrite input FITS cube with the pixel-fixed CRSPLIT images.
                 for ii, fp in enumerate(self.fileList):
-                    self.update_fits(fp, newData=sci_data[ii],
+                    self.update_fits(fp, newData=self.workingImgs[ii],
                                      newHeader=None, sciOnly=True)
 
         # Load occulter mask from repository file.
@@ -1992,7 +2040,7 @@ class Pipeline(object):
         occultMask[occultMask < 0] = -1e4
 
         # Mask the saturated pixels.
-        saturationMask = np.zeros(sci_data.shape)
+        saturationMask = np.zeros(self.workingImgs.shape)
         saturationMask[dq_bool_256] = -1e4
 
  # FIX ME!!! Move most of this into the data loading method??
@@ -2023,7 +2071,6 @@ class Pipeline(object):
                                 "identified for RDI mode")
 
         self.logger.info("Science image indices: {}".format(self.sciInds))
-        self.logger.info("Ref image indices ({}): {}\n".format(targs[self.refInds], self.refInds))
 
         # Get UT observation date, proposed aperture name, orientat angles, and
         # rough star coordinates from headers.
@@ -2070,15 +2117,21 @@ class Pipeline(object):
             self.inputType = newSuffix
             self.fileList = np.asarray(x2dFileList, dtype='O')
 
-            sci_data, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, \
+            self.workingImgs, err_data, dq_data, dq_bool_16, dq_bool_256, dq_bool_8192, all_headers, sci_headers, \
                 err_headers, dq_headers, targs = self.load_flt_imgs(plot_images=False,
                                                                     scienceOnly=False)
             self.allHdrs = all_headers
-            self.imgShape = np.array(sci_data[0][0].shape)
+            self.imgShape = np.array(self.workingImgs[0][0].shape)
 
             # Update saturation masks after distortion correction.
-            saturationMask = np.zeros(sci_data.shape)
+            saturationMask = np.zeros(self.workingImgs.shape)
             saturationMask[dq_bool_256] = -1e4
+
+        # Don't need these anymore.
+        del dq_bool_16
+        del dq_bool_256
+        del dq_bool_8192
+        del dq_data
 
 
     # ========== IMAGE ALIGNMENT (REGISTRATION) ========== #
@@ -2096,7 +2149,7 @@ class Pipeline(object):
                     targDec = priHdr['DEC_TARG']
                     starFromWCS_flt = []
                     for jj, hdr in enumerate(sci_headers[ii][1:]):
-                        if np.all(np.isnan(sci_data[ii][jj])):
+                        if np.all(np.isnan(self.workingImgs[ii][jj])):
                             starFromWCS_flt.append(np.array([np.nan, np.nan]))
                             continue
                         ww = wcs.WCS(hdr)
@@ -2116,7 +2169,6 @@ class Pipeline(object):
 # FITS cubes. This means the ERR and DQ arrays become out of alignment with
 # the science images after this stage.
 
-
         # Align CRSPLIT exposures, if they are present.
         # Write aligned images to new alc.fits (if CTI-corrected) or alt.fits
         # files (if not CTI-corrected).
@@ -2126,8 +2178,8 @@ class Pipeline(object):
         self.alignStarOffsetsAll = []
         alignMasksAll = []
         if self.inputType in ['flt', 'flc', 'xft', 'xfc']:
-            for ii in range(len(sci_data)):
-                alignImgs, alignMasks = self.align_imgs(sci_data[ii],
+            for ii in range(len(self.workingImgs)):
+                alignImgs, alignMasks = self.align_imgs(self.workingImgs[ii],
                                                     indImg=ii, masks=[],
                                                     commonMask=occultMask,
                                                     saturationMasks=saturationMask[ii],
@@ -2153,7 +2205,7 @@ class Pipeline(object):
 
                 # # Reassemble aligned CRSPLIT images into a new cube with same
                 # # extensions as an flt.
-                # self.write_aligned_fits(list(sum(list(zip(sci_data[ii], err_data[ii], dq_data[ii])), ())),
+                # self.write_aligned_fits(list(sum(list(zip(self.workingImgs[ii], err_data[ii], dq_data[ii])), ())),
                 #                         headers=list(sum(list(zip(sci_headers[ii][1:], err_headers[ii], dq_headers[ii])), ())),
                 #                         filePath=outPath,
                 #                         priHdr=sci_headers[ii][0])
@@ -2181,14 +2233,10 @@ class Pipeline(object):
 
 # FIX ME!!! We can avoid loading from file again here, since the aligned
 # images are stored in memory.
-            sci_data, sci_headers, targs = self.load_flt_imgs(plot_images=False,
+            self.workingImgs, sci_headers, targs = self.load_flt_imgs(plot_images=False,
                                                               scienceOnly=True)
-            self.imgShape = np.array(sci_data[0][0].shape)
-            self.workingImgs = sci_data
-
         else:
-            self.workingImgs = sci_data
-            self.stars = np.tile(self.alignStar, (sci_data.shape[0], 1))
+            self.stars = np.tile(self.alignStar, (self.workingImgs.shape[0], 1))
             self.starsOriginal = []
             for hdrs in self.allHdrs:
                 self.starsOriginal.append(np.array([hdrs[1]['ORIGCENY'], hdrs[1]['ORIGCENX']]))
@@ -2196,8 +2244,7 @@ class Pipeline(object):
             self.alignStarOffsets = self.stars - self.starsOriginal
 
             # Align the masks.
-            for ii in range(len(sci_data)):
-                # imgsPadded = self.pad_imgs(sci_data[ii], outputShape=(1100,1100), fill=0.)
+            for ii in range(len(self.workingImgs)):
                 alignMasks = shift_pix_to_pix(occultMask, self.starsOriginal[ii],
                                               finalYX=self.alignStar,
                                               outputSize=np.array([2048, 2048]),
@@ -2205,6 +2252,8 @@ class Pipeline(object):
                 alignMasksAll.append(alignMasks.copy())
 # FIX ME!!! Convert all earlier alignMasks to self.alignMasks.
             self.alignMasks = np.array(alignMasksAll)
+
+        self.imgShape = np.array(self.workingImgs[0][0].shape)
 
 
     # ========== BACKGROUND SUBTRACTION ========== #
@@ -2228,40 +2277,42 @@ class Pipeline(object):
 # files rather than their suffixes.
         if self.inputType in ['flt', 'flc', 'alt', 'aft', 'alc', 'axt', 'axc']:
             self.logger.info("COMBINING CRSPLITS into unified images...")
-            yy, xx = np.ogrid[:sci_data[0].shape[1], :sci_data[0].shape[2]]
-            for ii in tqdm(range(sci_data.shape[0]), desc="Images being unified"):
+            for ii in tqdm(range(self.workingImgs.shape[0]), desc="Images being unified"):
                 # Throw away CRSPLITS that are all NaN.
-                wh_all_nan = np.all(np.isnan(sci_data[ii]), axis=(2,1))
+                wh_all_nan = np.all(np.isnan(self.workingImgs[ii]), axis=(2,1))
                 crsplits_to_keep = ~wh_all_nan
                 # Clip pixels more than 5-MAD discrepant in every CRSPLIT stack.
                 # MAD = median absolute deviation = the median over the
                 # absolute deviations from the median (ignoring NaN)
                 # Remove all-NaN CRSPLITS before computing MAD to save time.
-                mad = median_abs_deviation(sci_data[ii][crsplits_to_keep], axis=0,
+                mad = median_abs_deviation(self.workingImgs[ii][crsplits_to_keep], axis=0,
                                            nan_policy='omit')
                 # Mask pixels more than 5 MAD from the median.
-                nmad = np.abs((sci_data[ii] - np.nanmedian(sci_data[ii], axis=0))/mad)
-                sci_data[ii][nmad > 5] = np.nan
+                nmad = np.abs((self.workingImgs[ii] - np.nanmedian(self.workingImgs[ii], axis=0))/mad)
+                self.workingImgs[ii][nmad > 5] = np.nan
+
+                # Don't need these anymore.
+                del mad
+                del nmad
 
             # Get an array of the number of CRSPLITS per image.
             n_crsplits = np.array([hdr[0].get('CRSPLIT') for hdr in sci_headers])
             # Average together the CRSPLITS, which does NOT conserve the flux.
-            unifiedImgs = np.nanmean(sci_data, axis=1)
+            unifiedImgs = np.nanmean(self.workingImgs, axis=1)
             # Multiply the averaged images by the number of CRSPLITS to
             # conserve the total flux of the CRSPLIT-integrated images.
             unifiedImgs *= n_crsplits.reshape(unifiedImgs.shape[0], 1, 1)
 
-            for ii in range(sci_data.shape[0]):
-                # Update headers for the unified images to reflect correct
-                # number of combined CRSPLITS.
+            # Update headers for the unified images to reflect correct
+            # number of combined CRSPLITS.
+            for ii in range(self.workingImgs.shape[0]):
                 for jj in range(1,len(sci_headers[ii])):
                     sci_headers[ii][jj]['NCOMBINE'] = n_crsplits[ii]
                 imgsHdrs[0].append([None, unifiedImgs[ii]])
                 imgsHdrs[1].append(sci_headers[ii][:2])
 
-            # Don't need these anymore.
+            # Don't need this anymore.
             del unifiedImgs
-            del sci_data
 
         # Zero-pad images to uniform dimensions, depending on instrument.
         if self.instrument == 'stis':
@@ -2292,14 +2343,17 @@ class Pipeline(object):
         # Optionally output the integrated images as FITS here.
         if self.saveAuxiliary:
             self.save_unified_to_fits([ii[1] for ii in imgsHdrs[0]], unit='DN',
-                                      headers=imgsHdrs[1], cid=self.cid)
+                                      headers=self.allHdrs, cid=self.cid)
+
+        # Don't need this anymore.
+        del imgsHdrs
 
 
     # ========== CALIBRATE FLUX ========== #
         # Convert intensity to counts per second.
         newUnit = 'COUNTS S-1'
         # newUnit = 'mJy arcsec-2'
-        self.workingImgs = convert_intensity(self.workingImgs, imgsHdrs[1],
+        self.workingImgs = convert_intensity(self.workingImgs, self.allHdrs,
                                     unitEnd=newUnit,
                                     pscale=self.pscale) # [counts/s]
         self.bunit = newUnit
@@ -2449,6 +2503,23 @@ class Pipeline(object):
                                                 exclusions=exclusionsRef,
                                                 cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
                                                 paOffset=0, spikeAngles=self.spikeAngles)
+# TESTING!!!
+                # Add star mask to sourceMasks, rotated to the correct PA.
+                if not self.noAutoMask:
+                    # Run astrosniff to create the 2D mask array for each ref
+                    # image.
+                    if not self.noAutoMask:
+                        ref_star_mask = self.make_star_mask(im=self.workingImgs[ind],
+                                                output_filename=os.path.splitext(os.path.basename(self.fileList[ind]))[0])
+                        if ref_star_mask is not None:
+                            # Reformat the output slightly to an ndarray.
+                            ref_star_mask = np.array(ref_star_mask)
+                        sourceMasks[ind] += ref_star_mask
+                    else:
+                        self.logger.info("Auto star masking is OFF")
+                        ref_star_mask = None
+
+
         # ADI and all other non-RDI cases.
         else:
             psfSubMasks_refs = self.alignMasks.copy()
@@ -2674,8 +2745,10 @@ class Pipeline(object):
 
         # Optionally save the individual PSF-subtracted images as a FITS cube.
         if self.saveAuxiliary:
-            self.save_psfsub_to_fits(self.psfSubImgs, 'psfcube', unit=newUnit,
-                                     cid=self.cid)
+            psfsubPath = self.save_psfsub_to_fits(self.psfSubImgs, 'psfcube',
+                                                  unit=newUnit, cid=self.cid)
+        else:
+            psfsubPath = None
 
         # Do another background subtraction before combination??
     # SKIP -- for now.
@@ -2683,28 +2756,34 @@ class Pipeline(object):
 
         # Perform astrometry on occulted primary using background star
         # Gaia positions.
-        if self.do_gaia:
-            self.logger.info("*** Running GAIA ASTROMETRY thingy on individual PSF-subtracted images ***\n")
+        if self.do_gaia and (psfsubPath is not None):
+            self.logger.info("*** Running GAIA ASTROMETRY on individual PSF-subtracted images ***\n")
             self.targSimbad = utils.format_target_name(self.targ)
             gaiaID = get_gaia_id(self.targSimbad)
             if gaiaID is not None:
                 gaiaIDNumber = int(gaiaID.split(' ')[-1])
-                # target_gaia_id = 6055854551117476480 #6072902994276659200 is HD-106906
                 target_rv = [0., 0.]
                 all_gaia_out = []
+
+# FIX ME!!! Still using the axc headers for Gaia astrometry below.
+                # # Retrieve the PSF cube header containing WCS info.
+                # psfsubHdr = fits.getheader(psfsubPath, ext=('SCI', 1))
+
                 for ii, img in enumerate(self.psfSubImgs):
                     # Star input order is x,y
                     # Output order is:
                     # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
                     # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
                     # final_tn_std
-                    gaia_out = main(f"{self.targ}_{self.obsMode}_{self.inputType}_{ii}",
+                    gaia_out = main(os.path.splitext(os.path.basename(psfsubPath))[0] + f"_{ii}",
                                     self.instrument, gaiaIDNumber, target_rv,
                                     self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
                                     exclude_extra=[], im=img, hdr=self.sciHdrs[ii][1],
                                     out_dir=self.dataDir)
                     all_gaia_out.append(gaia_out)
                     self.logger.info(f"PSF-sub image {ii} Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
+                    add_header(psfsubPath, gaia_out[0], gaia_out[1],
+                                gaia_out[5], gaia_out[6])
             else:
                 self.logger.error("*** FAILED to measure Gaia astrometry: "\
                       f"invalid Gaia ID number for target ({self.targSimbad})\n")
@@ -2817,20 +2896,73 @@ class Pipeline(object):
                 if finalImg_finalProfSub is not None:
                     finalImg_finalProfSub, bgFinal = utils.subtract_bg(finalImg_finalProfSub, np.array(info[obsMode].get('bgCenFinal_yx').split(' '), dtype=float), self.bgRadius)
 
+# TEMP!!!
+            # Update the final image's WCS header info.
+            wcs_header_keys = rotate_wcs(header=self.sciHdrs[0][1],
+                                         theta=-self.orientats[0],
+                                         center_yx=np.array([1024., 1024.]))
+
+            self.logger.info("Rotated WCS header to match derotated "\
+                             "final image.")
+
             # Write the final combined PSF-subtracted image(s) to FITS file.
             if self.saveFinal:
+
                 if finalImg_noFinalProfSub is None:
-                    self.save_psfsub_to_fits(finalImg, 'final',
-                                             unit=newUnit, cid=self.cid)
+                    finalPath = self.save_psfsub_to_fits(finalImg, 'final',
+                                                    unit=newUnit, cid=self.cid,
+                                                    headers=wcs_header_keys)
                 else:
                     # Index order: 0 = all subtractions;
                     # 1 = no final radial profile subtraction
                     # 2 = no radial profile subtracts at all
-                    self.save_psfsub_to_fits(np.array([finalImg_finalProfSub,
+                    finalPath = self.save_psfsub_to_fits(np.array([finalImg_finalProfSub,
                                                        finalImg_noFinalProfSub,
                                                        finalImg]),
                                              'final', unit=newUnit,
-                                             cid=self.cid)
+                                             cid=self.cid,
+                                             headers=wcs_header_keys)
+            else:
+                finalPath = None
+
+            # Perform astrometry on occulted primary using background star
+            # Gaia positions.
+            if self.do_gaia and (finalPath is not None):
+                self.logger.info("*** Running GAIA ASTROMETRY on final image ***\n")
+                self.targSimbad = utils.format_target_name(self.targ)
+                gaiaID = get_gaia_id(self.targSimbad)
+                if gaiaID is not None:
+                    target_rv = [0., 0.]
+                    # Star input order is x,y
+                    # Output order is:
+                    # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
+                    # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
+                    # final_tn_std
+# # FIX ME!!! Need to add WCS header keywords to final image for this to work.
+#                     from astropy.wcs import WCS
+#                     wcs_psfsub0 = WCS(self.sciHdrs[0][1])
+#                     rotation_matrix = np.array([[np.cos(np.radians(self.orientats[0])), -np.sin(np.radians(self.orientats[0]))],
+#                                                 [np.sin(np.radians(self.orientats[0])), np.cos(np.radians(self.orientats[0]))]])
+#                     temp_wcs = wcs_psfsub0.copy()
+#                     temp_wcs.wcs.cd = wcs_psfsub0.wcs.cd*rotation_matrix
+#                     temp_hdr = fits.getheader(finalPath).copy()
+#                     temp_hdr = temp_hdr + temp_wcs.to_header()
+
+                    # Retrieve the final image header containing WCS info.
+                    finalHdr = fits.getheader(finalPath, ext=('SCI', 1))
+                    gaia_out = main(f"{self.targ}_{self.obsMode}_{self.inputType}_final",
+                                    self.instrument, gaiaIDNumber, target_rv,
+                                    self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
+                                    exclude_extra=[], im=finalImg, hdr=finalHdr,
+                                    out_dir=self.dataDir)
+                    all_gaia_out.append(gaia_out)
+                    self.logger.info(f"Final image: Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
+
+                    add_header(finalPath, gaia_out[0], gaia_out[1],
+                               gaia_out[5], gaia_out[6])
+                else:
+                    self.logger.error("*** FAILED to measure Gaia astrometry from final image: "\
+                          f"invalid Gaia ID number for target ({self.targSimbad})\n")
 
 # FIX ME!!! Compute error maps for each version of the final image.
 # Currently only compute for the version with no radial profile subtractions at all.
