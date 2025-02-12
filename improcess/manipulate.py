@@ -3,12 +3,10 @@
 import os
 import pdb
 import numpy as np
-from glob import glob
 import matplotlib.pyplot as plt
 from matplotlib.colors import SymLogNorm
-from astropy.io import ascii, fits
-from scipy.ndimage import gaussian_filter, median_filter
-from scipy.ndimage import filters, map_coordinates
+from astropy.io import fits
+from astropy.wcs import WCS
 from ..utils import make_radii
 
 
@@ -186,3 +184,46 @@ def zero_pad(data, outsize, method='simple'):
     padded[pad_y:pad_y+data.shape[0], pad_x:pad_x+data.shape[1]] = data.copy()
 
     return padded
+
+
+def rotate_wcs(header, theta, center_yx):
+
+    # Create a WCS object from the header.
+    wcs_orig = WCS(header)
+    # Get the original CD matrix. (If only PC and CDELT are present, combine them.)
+    if wcs_orig.wcs.has_cd():
+        old_cd = wcs_orig.wcs.cd
+    else:
+        old_cd = np.dot(np.diag(wcs_orig.wcs.cdelt), wcs_orig.wcs.pc)
+
+    # Build the 2x2 rotation matrix R(-theta) in (x, y) coordinates.
+    # Convert theta from degrees to radians.
+    theta_rad = np.deg2rad(theta)
+    cos_theta = np.cos(theta_rad)
+    sin_theta = np.sin(theta_rad)
+    # Note: R(-theta) = [[cos(theta), sin(theta)],
+    #                     [-sin(theta), cos(theta)]]
+    # R_wcs = np.array([[cos_theta, sin_theta],
+    #                   [-sin_theta, cos_theta]])
+
+    rotation_matrix = np.array([[cos_theta, -sin_theta],
+                                [sin_theta,  cos_theta]])
+    new_cd = np.dot(old_cd, rotation_matrix)
+
+    # Set the new reference pixel to the chosen center.
+    new_crpix = center_yx[::-1]
+    # Adjust the reference value so that the world coordinate at the center remains the same:
+    new_crval = wcs_orig.wcs.crval + np.dot(old_cd, (new_crpix - wcs_orig.wcs.crpix))
+
+    # Update the original WCS object.
+    wcs_orig.wcs.crpix = new_crpix
+    wcs_orig.wcs.crval = new_crval
+    wcs_orig.wcs.cd = new_cd
+
+    # Generate a new header from the updated WCS.
+    new_wcs_header = wcs_orig.to_header()
+    # # Update (or replace) the original header keywords with the new WCS keywords.
+    # new_header = header.copy()
+    # new_header.update(new_wcs_header)
+
+    return new_wcs_header
