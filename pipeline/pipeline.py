@@ -19,7 +19,7 @@ from matplotlib.colors import SymLogNorm
 from astropy.io import ascii, fits
 from astropy import table, wcs
 from astropy.time import Time, TimeDelta
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, median_filter
 from scipy.interpolate import interp1d
 from scipy.stats import median_abs_deviation
 
@@ -1152,6 +1152,67 @@ class Pipeline(object):
 
         return im_bgsub, bgs
 
+    def combine_crsplits(self, imgsHdrs, sci_headers):
+        for ii in tqdm(range(self.workingImgs.shape[0]), desc="Images being unified"):
+            # Throw away CRSPLITS that are all NaN.
+            wh_all_nan = np.all(np.isnan(self.workingImgs[ii]), axis=(2,1))
+            crsplits_to_keep = ~wh_all_nan
+            # Clip pixels more than 5-MAD discrepant in every CRSPLIT stack.
+            # MAD = median absolute deviation = the median over the
+            # absolute deviations from the median (ignoring NaN)
+            # Remove all-NaN CRSPLITS before computing MAD to save time.
+            if np.sum(crsplits_to_keep) > 2:
+                mad = median_abs_deviation(self.workingImgs[ii][crsplits_to_keep], axis=0,
+                                           nan_policy='omit')
+                # Mask pixels more than 5 MAD from the median.
+                nmad = np.abs((self.workingImgs[ii] - np.nanmedian(self.workingImgs[ii], axis=0))/mad)
+                # nmad = np.abs((self.workingImgs[ii][crsplits_to_keep] - median_filter(self.workingImgs[ii][crsplits_to_keep], footprint=np.ones((self.workingImgs[ii][crsplits_to_keep].shape[0], 3, 3))))/mad)
+                self.workingImgs[ii][nmad > 5] = np.nan
+
+                # Don't need these anymore.
+                del mad
+                del nmad
+            # The MAD stats break down with only 2 CRSPLITS, so we
+            # use a different approach in these cases.
+            elif np.sum(crsplits_to_keep) == 2:
+                diff = self.workingImgs[ii][0] - self.workingImgs[ii][1]
+                med_both = np.nanmedian(self.workingImgs[ii], axis=0)
+                med_nebs_med = np.nanmedian(median_filter(self.workingImgs[ii][crsplits_to_keep],
+                                                          footprint=np.ones((self.workingImgs[ii][crsplits_to_keep].shape[0], 9, 9))),
+                                            axis=0)
+                cond = (np.abs(med_both) <= np.abs(diff)) & \
+                       ((self.workingImgs[ii] - med_nebs_med)/(1 + np.abs(med_nebs_med)) > 7)
+                self.workingImgs[ii][cond] = np.nan
+
+                # Don't need these anymore.
+                del diff
+                del med_both
+                del med_nebs_med
+                del cond
+            else:
+                pass
+
+        # Get an array of the number of CRSPLITS per image.
+        n_crsplits = np.array([hdr[0].get('CRSPLIT') for hdr in sci_headers])
+        # Average together the CRSPLITS, which does NOT conserve the flux.
+        unifiedImgs = np.nanmean(self.workingImgs, axis=1)
+        # Multiply the averaged images by the number of CRSPLITS to
+        # conserve the total flux of the CRSPLIT-integrated images.
+        unifiedImgs *= n_crsplits.reshape(unifiedImgs.shape[0], 1, 1)
+
+        # Update headers for the unified images to reflect correct
+        # number of combined CRSPLITS.
+        for ii in range(self.workingImgs.shape[0]):
+            for jj in range(1,len(sci_headers[ii])):
+                sci_headers[ii][jj]['NCOMBINE'] = n_crsplits[ii]
+            imgsHdrs[0].append([None, unifiedImgs[ii]])
+            imgsHdrs[1].append(sci_headers[ii][:2])
+
+        # Don't need this anymore.
+        del unifiedImgs
+
+        return imgsHdrs
+
     def update_dimensions(self, imgs, hdrs):
         """
         Update header array dimensions given image arrays.
@@ -2271,48 +2332,13 @@ class Pipeline(object):
 
     # ========== COMBINE CRSPLITS ========== #
 
-# FIX ME!!! CRSPLIT combination should move to a method eventually.
         # Combine CRSPLITS into one "integrated" image per FITS.
 # FIX ME!!! Should maybe base the logic here on the dimensions of the input
 # files rather than their suffixes.
         if self.inputType in ['flt', 'flc', 'alt', 'aft', 'alc', 'axt', 'axc']:
             self.logger.info("COMBINING CRSPLITS into unified images...")
-            for ii in tqdm(range(self.workingImgs.shape[0]), desc="Images being unified"):
-                # Throw away CRSPLITS that are all NaN.
-                wh_all_nan = np.all(np.isnan(self.workingImgs[ii]), axis=(2,1))
-                crsplits_to_keep = ~wh_all_nan
-                # Clip pixels more than 5-MAD discrepant in every CRSPLIT stack.
-                # MAD = median absolute deviation = the median over the
-                # absolute deviations from the median (ignoring NaN)
-                # Remove all-NaN CRSPLITS before computing MAD to save time.
-                mad = median_abs_deviation(self.workingImgs[ii][crsplits_to_keep], axis=0,
-                                           nan_policy='omit')
-                # Mask pixels more than 5 MAD from the median.
-                nmad = np.abs((self.workingImgs[ii] - np.nanmedian(self.workingImgs[ii], axis=0))/mad)
-                self.workingImgs[ii][nmad > 5] = np.nan
 
-                # Don't need these anymore.
-                del mad
-                del nmad
-
-            # Get an array of the number of CRSPLITS per image.
-            n_crsplits = np.array([hdr[0].get('CRSPLIT') for hdr in sci_headers])
-            # Average together the CRSPLITS, which does NOT conserve the flux.
-            unifiedImgs = np.nanmean(self.workingImgs, axis=1)
-            # Multiply the averaged images by the number of CRSPLITS to
-            # conserve the total flux of the CRSPLIT-integrated images.
-            unifiedImgs *= n_crsplits.reshape(unifiedImgs.shape[0], 1, 1)
-
-            # Update headers for the unified images to reflect correct
-            # number of combined CRSPLITS.
-            for ii in range(self.workingImgs.shape[0]):
-                for jj in range(1,len(sci_headers[ii])):
-                    sci_headers[ii][jj]['NCOMBINE'] = n_crsplits[ii]
-                imgsHdrs[0].append([None, unifiedImgs[ii]])
-                imgsHdrs[1].append(sci_headers[ii][:2])
-
-            # Don't need this anymore.
-            del unifiedImgs
+            imgsHdrs = self.combine_crsplits(imgsHdrs, sci_headers)
 
         # Zero-pad images to uniform dimensions, depending on instrument.
         if self.instrument == 'stis':
@@ -2340,13 +2366,13 @@ class Pipeline(object):
         self.sciHdrs = [imgsHdrs[1][ii] for ii in self.sciInds]
         self.refHdrs = [imgsHdrs[1][ii] for ii in self.refInds]
 
-        # Optionally output the integrated images as FITS here.
-        if self.saveAuxiliary:
-            self.save_unified_to_fits([ii[1] for ii in imgsHdrs[0]], unit='DN',
-                                      headers=self.allHdrs, cid=self.cid)
-
         # Don't need this anymore.
         del imgsHdrs
+
+        # Optionally output the integrated images as FITS here.
+        if self.saveAuxiliary:
+            self.save_unified_to_fits([ii[1] for ii in self.workingImgs], unit='DN',
+                                      headers=self.allHdrs, cid=self.cid)
 
 
     # ========== CALIBRATE FLUX ========== #
