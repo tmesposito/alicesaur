@@ -36,6 +36,11 @@ def plot_fits(data_table, include_indx, sky_pos, sky_cov, px_pos, px_cov,
               xoff, yoff, outname='gaia_psffits'):
 
     n_stars = len(include_indx)
+    if n_stars == 0:
+        print("*** ERROR: Could not plot PSF stamps because there are "\
+              "zero stars provided. ***")
+        return -1
+
     fig, ax = plt.subplots(n_stars, 6, figsize=(12, 2.0*float(n_stars)))
 
     n_steps, n_walkers, n_dim = samples.shape

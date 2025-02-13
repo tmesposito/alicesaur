@@ -308,6 +308,11 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     include_indx = [list(source_id).index(k) for k in include_id] # A list of the indicies for those stars in the `source_id` list
     #_ = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=1000, nburn=250)
 
+    # Abandon if no Gaia stars were identified.
+    if len(include_indx) == 0:
+        print("*** WARNING: No Gaia stars found in the image. Skipping Gaia astrometry. ***")
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+
     print("Running Gaia MCMC...")
     nsteps = 100
     nburn = 25
