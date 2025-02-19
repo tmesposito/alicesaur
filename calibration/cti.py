@@ -56,6 +56,7 @@ class CTI():
 
         self.obsMode = None
         self.loggerName = None
+        self.loginToken = None
 
         # Define attributes with kwargs items
         for key, val in kwargs.items():
@@ -332,6 +333,11 @@ class CTI():
 
         self.logger.info('Data Fetch: Downloading & copying data to {}\n'.format(destination))
 
+        # Authenticate with a MyST account token. Needed for proprietary
+        # data download only.
+        if self.loginToken is not None:
+            session = Observations.login(token=self.loginToken)
+
         # Get data products for each observation ID
         obs = Observations.query_criteria(obs_id=ids)    
         products = Observations.get_product_list(obs)
@@ -427,10 +433,6 @@ class CTI():
         if len(self.ccd_oids) == 0:
             return False
 
-# # TEMP!!!
-#         self.ccd_oids = self.ccd_oids[24:32]
-#         breakpoint()
-
         # Download data.
         # Choices for product_types: 'RAW', 'FLT', 'CRJ', 'EPC', 'SPT', 'ASN', 'SX2'
         if download:
@@ -443,8 +445,34 @@ class CTI():
         # os.chdir(cwd)
         # Get a list of images for the CCD and download reference files
         self.ccd_list = sorted(glob.glob(os.path.join(self.ccd_dir, '*_raw.fits')))
-        # self.ccd_list = glob.glob(os.path.join(self.ccd_dir, '*_flt.fits'))
-        # ccd_list = [fp.replace('flt.fits', 'raw.fits') for fp in tmp_list]
+
+        # Check if the images are subarrayed. If they are, we cannot do the
+        # CTI correction and must skip it.
+        subarrayed_images = []
+        for pth in self.ccd_list:
+            try:
+                hdr = fits.getheader(pth, ext=1)
+
+                if (hdr.get('NAXIS1', 1024) < 1024) or (hdr.get('NAXIS2', 1024) < 1024):
+                    subarrayed_images.append(True)
+                else:
+                    subarrayed_images.append(False)
+            except:
+                subarrayed_images.append(False)
+
+        if np.all(subarrayed_images):
+            self.logger.warning("CTI correction: All images are subarrayed. "\
+                                "CTI correction cannot be performed. "\
+                                "SKIPPING CTI CORRECTION.")
+            if clean:
+                self.cleanup()
+
+            return False
+        else:
+            self.logger.info("CTI correction: At least "\
+                             f"{np.sum(~np.array(subarrayed_images))} images "\
+                            "are not subarrayed. Continuing correction...")
+
         if download:
             self.download_ref_files(self.ccd_list)
             self.logger.info("CTI correction: Finished downloading reference files\n")
