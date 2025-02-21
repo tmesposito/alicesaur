@@ -163,8 +163,11 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     '''
 
     w = WCS(hdr)
+    # Assume reference position RA, Dec from WCS header keys.
     ref_pos = w.pixel_to_world(hdr['CRPIX1'], hdr['CRPIX2'])
+    # Guess plate scale based on X axis only, in [mas pixel^-1]
     guess_ps = np.mean([x.to(u.mas).value for x in w.proj_plane_pixel_scales()])
+    # Guess true north angle from ORIENTAT key, in [radians]
     guess_tn = hdr.get('ORIENTAT', 0.)*np.pi/180.0
 
     # Exposure mid-point in decimal years
@@ -245,9 +248,12 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     '''
     Propagate gaia astrometry to the HST epoch
     '''
-    # Propagate astrometry and calculate tangent plane offsets relative to target
+    # Propagate astrometry and calculate tangent plane offsets relative to
+    # target, for which we also output the coordinates.
     dt = t_hst - t_gaia
-    sky_pos, sky_cov = gaia_utils.tangent_plane_offsets(data, t_hst, dt, np.where(source_id == target_id)[0][0], target_rv, n_mc=int(1e4))
+    sky_pos, sky_cov, ra_target, de_target, plx_target = gaia_utils.tangent_plane_offsets(
+                    data, t_hst, dt, np.where(source_id == target_id)[0][0],
+                    target_rv, n_mc=int(1e4))
 
     # Compute pixel offsets using guess plate scale and true north angle
     x = (1.0/guess_ps) * (-sky_pos[:, 0]*np.cos(guess_tn) + sky_pos[:, 1]*np.sin(guess_tn)) + target_xy[0]
@@ -284,7 +290,8 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     '''
     star_errors = None
     if inst.lower() == 'stis':
-        xoff, yoff = -0.054, -0.047
+        # xoff, yoff = -0.054, -0.047
+        xoff, yoff = 0., 0.
         xinf, yinf = 0.05, 0.05
     elif inst.lower() == 'acs':
         xoff, yoff = 0., 0.
@@ -293,9 +300,21 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     else:
         xoff, yoff = 0., 0.
         xinf, yinf = 0., 0.
+    if (xoff == 0) and (yoff == 0):
+        print("No Gaia star center fit position offsets were applied")
+    else:
+        print("Applied Gaia star center fit position offsets of "\
+              f"x_off = {xoff} pix and y_off = {yoff} pix")
+    if (xinf == 0) and (yinf == 0):
+        print("No Gaia star center fit error inflation was applied")
+    else:
+        print("Applied Gaia star center fit error inflation (in quadrature) "\
+              f"of x_inf = {xinf} pix and y_ing = {yinf} pix")
+
     px_pos, px_cov, data_stamps, model_stamps, model_fits = fit_psf.fit(im,
                                 x, y, source_id, exclude_id, star_errors,
-                                [xoff, yoff], [xinf, yinf], method='gaussian')
+                                [xoff, yoff], [xinf, yinf], method='gaussian',
+                                data=data)
 
     '''
     TODO: additional filtering here based on peak flux, FWHM
@@ -359,7 +378,7 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
                             final_target_x, final_target_y, final_ps_x, final_ps_y, final_tn,
                             xoff, yoff, outname=os.path.join(out_dir, f'gaia_psffits-{filename}'))
 
-    return final_x_median, final_y_median, final_ps_x_median, final_ps_y_median, final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std, final_tn_std
+    return final_x_median, final_y_median, final_ps_x_median, final_ps_y_median, final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std, final_tn_std, ra_target, de_target, plx_target
 
 
 if __name__ == '__main__':

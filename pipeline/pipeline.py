@@ -2371,7 +2371,7 @@ class Pipeline(object):
 
         # Optionally output the integrated images as FITS here.
         if self.saveAuxiliary:
-            self.save_unified_to_fits([ii[1] for ii in self.workingImgs], unit='DN',
+            self.save_unified_to_fits(self.workingImgs, unit='DN',
                                       headers=self.allHdrs, cid=self.cid)
 
 
@@ -2769,6 +2769,7 @@ class Pipeline(object):
             self.psfSubImgs_subRadProf = []
             self.refScaleFactors = None
 
+# TO DO: Enforce saving the psfsub cube; remove the option.
         # Optionally save the individual PSF-subtracted images as a FITS cube.
         if self.saveAuxiliary:
             psfsubPath = self.save_psfsub_to_fits(self.psfSubImgs, 'psfcube',
@@ -2792,15 +2793,16 @@ class Pipeline(object):
                 all_gaia_out = []
 
 # FIX ME!!! Still using the axc headers for Gaia astrometry below.
-                # # Retrieve the PSF cube header containing WCS info.
-                # psfsubHdr = fits.getheader(psfsubPath, ext=('SCI', 1))
 
                 for ii, img in enumerate(self.psfSubImgs):
+# # TEMP OFF!!!
+#                     # Retrieve the PSF cube header containing WCS info.
+#                     psfsubHdr = fits.getheader(psfsubPath, ext=('SCI', 1+ii))
                     # Star input order is x,y
                     # Output order is:
                     # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
                     # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
-                    # final_tn_std
+                    # final_tn_std, ra_target, de_target, plx_target
                     gaia_out = main(os.path.splitext(os.path.basename(psfsubPath))[0] + f"_{ii}",
                                     self.instrument, gaiaIDNumber, target_rv,
                                     self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
@@ -2808,8 +2810,17 @@ class Pipeline(object):
                                     out_dir=self.dataDir)
                     all_gaia_out.append(gaia_out)
                     self.logger.info(f"PSF-sub image {ii} Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
-                    add_header(psfsubPath, gaia_out[0], gaia_out[1],
-                                gaia_out[5], gaia_out[6])
+
+                    # Sanitize the Gaia output for FITS header writing.
+                    gaia_out = np.array(gaia_out)
+                    for ii, go in enumerate(gaia_out):
+                        if np.isnan(go):
+                            gaia_out[ii] = -999
+                    add_header(psfsubPath, 1, gaia_out[10], gaia_out[11],
+                               gaia_out[12], gaia_out[0], gaia_out[1],
+                               gaia_out[5], gaia_out[6], gaia_out[4],
+                               gaia_out[9], gaia_out[2], gaia_out[3],
+                               gaia_out[7], gaia_out[8])
             else:
                 self.logger.error("*** FAILED to measure Gaia astrometry: "\
                       f"invalid Gaia ID number for target ({self.targSimbad})\n")
@@ -2984,8 +2995,16 @@ class Pipeline(object):
                     all_gaia_out.append(gaia_out)
                     self.logger.info(f"Final image: Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
 
-                    add_header(finalPath, gaia_out[0], gaia_out[1],
-                               gaia_out[5], gaia_out[6])
+                    # Sanitize the Gaia output for FITS header writing.
+                    gaia_out = np.array(gaia_out)
+                    for ii, go in enumerate(gaia_out):
+                        if np.isnan(go):
+                            gaia_out[ii] = -999
+                    add_header(finalPath, 1, gaia_out[10],
+                               gaia_out[11], gaia_out[12], gaia_out[0],
+                               gaia_out[1],gaia_out[5], gaia_out[6],
+                               gaia_out[4],gaia_out[9], gaia_out[2],
+                               gaia_out[3],gaia_out[7], gaia_out[8])
                 else:
                     self.logger.error("*** FAILED to measure Gaia astrometry from final image: "\
                           f"invalid Gaia ID number for target ({self.targSimbad})\n")

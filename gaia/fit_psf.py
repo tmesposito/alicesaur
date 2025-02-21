@@ -6,7 +6,47 @@ def tie_std(model):
     return model.x_stddev
 
 
-def fit(im, x, y, source_id, exclude_id, star_errors, offset, inflation, method='gaussian'):
+def fit(im, x, y, source_id, exclude_id, star_errors, offset, inflation,
+        method='gaussian', data=None):
+    """
+
+    Parameters
+    ----------
+    im : TYPE
+        DESCRIPTION.
+    x : TYPE
+        DESCRIPTION.
+    y : TYPE
+        DESCRIPTION.
+    source_id : TYPE
+        DESCRIPTION.
+    exclude_id : TYPE
+        DESCRIPTION.
+    star_errors : TYPE
+        DESCRIPTION.
+    offset : list of float
+        [X, Y] offsets in [pixels] to be applied to all fit center outputs
+    inflation : TYPE
+        DESCRIPTION.
+    method : TYPE, optional
+        DESCRIPTION. The default is 'gaussian'.
+    data : TYPE, optional
+        DESCRIPTION. The default is None.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+    TYPE
+        DESCRIPTION.
+    list
+        DESCRIPTION.
+    model_stamps : TYPE
+        DESCRIPTION.
+    model_fits : TYPE
+        DESCRIPTION.
+
+    """
 
     # We assume that the input list has been cleaned and these are all valid stars to fit
 
@@ -25,6 +65,10 @@ def fit(im, x, y, source_id, exclude_id, star_errors, offset, inflation, method=
 
         pad1 = 5
         pad2 = 5
+
+        if star_errors is None:
+            print("Assuming 0.1 pixel uncertainty on all Gaia star "\
+                  "centers because no measured uncertainties were provided")
 
         for i in range(0, n):
             if source_id[i] in exclude_id:
@@ -79,6 +123,8 @@ def fit(im, x, y, source_id, exclude_id, star_errors, offset, inflation, method=
                 data2_stamps.append(stamp2)
                 model_stamps.append(best_fit_model(xarr, yarr))
 
+                # Prefer to use measured uncertainties for star centers. If
+                # none exist, assume 0.1 pixel error for all.
                 if star_errors is not None:
                     err_indx = np.where((star_errors['gaia_id'].data == data['Source'][j]) & (star_errors['file'].data == os.path.basename(im_list[i])))[0][0]
                     x_err = star_errors['x_err'].data[err_indx]
@@ -87,7 +133,7 @@ def fit(im, x, y, source_id, exclude_id, star_errors, offset, inflation, method=
                     x_err = 0.1
                     y_err = 0.1
 
-                # xinf, yinf = inflation terms
+                # xinf, yinf = error inflation terms
                 if xinf > 0.0: x_err = np.sqrt((x_err**2 + xinf**2))
                 if yinf > 0.0: y_err = np.sqrt((y_err**2 + yinf**2))
 

@@ -92,6 +92,23 @@ def propagate_epoch_vector(ra0, de0, plx0, mu_ra0, mu_de0, rv0, dt):
     return ra, de, plx, mu_ra, mu_de, rv
 
 def tangent_plane_offsets(data, t_hst, dt, ind0, rv_target, n_mc=int(1e6)):
+    """
+
+    OUTPUTS:
+
+        sky_pos
+
+        sky_cov
+
+        ra_target: float
+          RA of the target at the observation epoch, in [degrees].
+
+        de_target: float
+          Declination of the target at the observation epoch, in [degrees].
+
+        plx_target: float
+          Parallax of the target at the observation epoch (unitless).
+    """
 
     dr = np.pi/180.0
     mr = (1.0/(1000.0*60*60))*(np.pi/180.0)
@@ -124,7 +141,7 @@ def tangent_plane_offsets(data, t_hst, dt, ind0, rv_target, n_mc=int(1e6)):
     # Lists to store the relative astrometry and covariance matricies
     sky_pos = []
     sky_cov = []
-    
+
     # Propagate all of the stars in the list to the HST epoch
 
     for j in range(0, len(data)):
@@ -162,7 +179,7 @@ def tangent_plane_offsets(data, t_hst, dt, ind0, rv_target, n_mc=int(1e6)):
     sky_pos = np.array(sky_pos)
     sky_cov = np.array(sky_cov)
 
-    return sky_pos, sky_cov
+    return sky_pos, sky_cov, np.mean(ra_target)/dr, np.mean(de_target)/dr, np.mean(plx_target)
 
 
 def confidence_levels(data):
@@ -235,15 +252,26 @@ def get_gaia_id(simbadName):
         return None
 
 
-def add_header(filepath, x_gaia, y_gaia, x_err_gaia, y_err_gaia):
+def add_header(filepath, ext, ra_target, de_target, plx_target,
+               x_gaia, y_gaia, x_err_gaia, y_err_gaia, tn_gaia, tn_err_gaia,
+               ps_x_gaia, ps_y_gaia, ps_x_err_gaia, ps_y_err_gaia):
 
     with fits.open(filepath, mode='update') as ff:
-        hdr = ff[0].header
+        hdr = ff[ext].header
 
-        hdr['GAIACENX'] = x_gaia
-        hdr['GAIACENY'] = y_gaia
-        hdr['GAIAERRX'] = x_err_gaia
-        hdr['GAIAERRY'] = y_err_gaia
+        hdr['GAIATRA'] = (ra_target, 'Target RA at obs. epoch as Gaia ref (deg)')
+        hdr['GAIATDEC'] = (de_target, 'Target Dec at obs. epoch as Gaia ref (deg)')
+        hdr['GAIATPLX'] = (plx_target, 'Target parallax at obs. epoch as Gaia ref (mas)')
+        hdr['GAIACENX'] = (x_gaia, 'Gaia astrometry star X pixel coordinate')
+        hdr['GAIACENY'] = (y_gaia, 'Gaia astrometry star Y pixel coordinate')
+        hdr['GAIAERRX'] = (x_err_gaia, 'Gaia astrometry star X pixel 1-sigma error')
+        hdr['GAIAERRY'] = (y_err_gaia, 'Gaia astrometry star Y pixel 1-sigma error')
+        hdr['GAIATRN'] = (tn_gaia, 'Gaia astrometry true north angle (deg)')
+        hdr['GAIATRNE'] = (tn_err_gaia, 'Gaia true north angle 1-sigma error (deg)')
+        hdr['GAIAPSX'] = (ps_x_gaia, 'Gaia astrometry X pixel scale (arcsec/pix)')
+        hdr['GAIAPSY'] = (ps_y_gaia, 'Gaia astrometry Y pixel scale (arcsec/pix)')
+        hdr['GAIAPSEX'] = (ps_x_err_gaia, 'Gaia X pl. scale 1-sigma error (arcsec/pix)')
+        hdr['GAIAPSEY'] = (ps_y_err_gaia, 'Gaia Y pl. scale 1-sigma error (arcsec/pix)')
 
         ff.flush()
 

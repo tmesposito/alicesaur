@@ -7,4 +7,4 @@ Created on Wed Nov  6 14:00:35 2024
 """
 
 # Alicesaur pipeline version number.
-__version__ = "1.1.4"
+__version__ = "1.1.5"
