@@ -1742,7 +1742,7 @@ class Pipeline(object):
             mjdMid = None
             dateEnd, timeEnd = None, None
 
-        if (np.array(data).ndim > 3) or (imType in ['final']):
+        if (np.array(data).ndim > 3) or (imType in ['psfcube', 'final']):
             hdul = fits.HDUList()
             priHdu = fits.PrimaryHDU()
             newPriHdr = priHdu.header
@@ -1765,10 +1765,11 @@ class Pipeline(object):
         newPriHdr['INPUTTYP'] = (self.inputType, 'Type of input data')
         newPriHdr['PSFSUBMD'] = (self.psfSubMode, 'PSF-subtraction mode')
         newPriHdr['CENTRADN'] = (not self.noRadon, 'Radon transformed to get center?')
-        newPriHdr['PSFCENTY'] = (self.alignStar[0], 'Y location of target star center')
-        newPriHdr['PSFCENTX'] = (self.alignStar[1], 'X location of target star center')
-        newPriHdr['ORIGCENY'] = (np.nanmean(self.starsOriginal, axis=0)[0], 'Un-padded mean star center Y')
-        newPriHdr['ORIGCENX'] = (np.nanmean(self.starsOriginal, axis=0)[1], 'Un-padded mean star center X')
+        newPriHdr['PSFCENTX'] = (self.alignStar[1], 'Target star center X pixel coordinate')
+        newPriHdr['PSFCENTY'] = (self.alignStar[0], 'Target star center Y pixel coordinate')
+        newPriHdr['ORIGCENX'] = (np.nanmean(self.starsOriginal, axis=0)[1], 'Original, un-padded mean star center X (pix)')
+        newPriHdr['ORIGCENY'] = (np.nanmean(self.starsOriginal, axis=0)[0], 'Original, un-padded mean star center Y (pix)')
+
         # Add dates.
         if dateStart is not None:
             newPriHdr['DATE-OBS'] = (dateStart, "UT date observation start (yyyy-mm-ddThh:mm:ss)")
@@ -1857,20 +1858,32 @@ class Pipeline(object):
         except:
             newPriHdr.add_comment('Failed to comment on constituent image exposure times.')
 
-        if (np.array(data).ndim > 3) or (imType in ['final']):
+        if (np.array(data).ndim > 3) or (imType in ['psfcube', 'final']):
             hdul.append(fits.PrimaryHDU(header=newPriHdr))
             # Create headers for all data extensions.
             for ii, da in enumerate(data):
-                # if (np.all(np.isnan(da)) | np.all(da == 0)):
-                #     continue
+                extHdr = newPriHdr.copy()
+                # Force header extension to next version (workaround).
+                extHdr['EXTNAME'] = 'SCI'
+                extHdr['EXTVER'] = 1 + ii
+
+                if imType in ['psfcube']:
+                    # Propagate WCS keys from previous headers.
+                    try:
+                        wcs_orig = wcs.WCS(self.allHdrs[self.sciInds[ii]][1], fix=False)
+                        new_wcs_header = wcs_orig.to_header()
+                        extHdr.update(new_wcs_header)
+                    except:
+                        self.logger.warning("Could not propagate WCS headers")
+
                 # Enforce data types to stabilize file size.
                 hdul.append(fits.ImageHDU(data=np.array(da).astype('float32'),
-                                          header=newPriHdr.copy(),
+                                          header=extHdr,
                                           name='SCI',
                                           ver=ii+1))
                 hdr = hdul[-1].header
                 if ii == 0:
-                    hdr['FILETYPE'] = ('Final combined PSF-subtracted image')
+                    hdr['FILETYPE'] = (filetype)
             hdul.writeto(self.dataDir + saveName, overwrite=True)
         else:
             hdu.writeto(self.dataDir + saveName, overwrite=True)
@@ -2813,10 +2826,10 @@ class Pipeline(object):
 
                     # Sanitize the Gaia output for FITS header writing.
                     gaia_out = np.array(gaia_out)
-                    for ii, go in enumerate(gaia_out):
+                    for jj, go in enumerate(gaia_out):
                         if np.isnan(go):
-                            gaia_out[ii] = -999
-                    add_header(psfsubPath, 1, gaia_out[10], gaia_out[11],
+                            gaia_out[jj] = -999
+                    add_header(psfsubPath, 1 + ii, gaia_out[10], gaia_out[11],
                                gaia_out[12], gaia_out[0], gaia_out[1],
                                gaia_out[5], gaia_out[6], gaia_out[4],
                                gaia_out[9], gaia_out[2], gaia_out[3],
