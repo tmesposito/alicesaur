@@ -309,7 +309,7 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
         print("No Gaia star center fit error inflation was applied")
     else:
         print("Applied Gaia star center fit error inflation (in quadrature) "\
-              f"of x_inf = {xinf} pix and y_ing = {yinf} pix")
+              f"of x_inf = {xinf} pix and y_inf = {yinf} pix")
 
     px_pos, px_cov, data_stamps, model_stamps, model_fits = fit_psf.fit(im,
                                 x, y, source_id, exclude_id, star_errors,
@@ -330,7 +330,7 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     # Abandon if no Gaia stars were identified.
     if len(include_indx) == 0:
         print("*** WARNING: No Gaia stars found in the image. Skipping Gaia astrometry. ***")
-        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
 
     print("Running Gaia MCMC...")
     nsteps = 100
