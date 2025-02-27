@@ -953,7 +953,7 @@ class Pipeline(object):
             alignImgs.append(shift_pix_to_pix(imgs[ii], stars[ii],
                                               finalYX=self.alignStar,
                                               outputSize=matSize,
-                                              order=3, fill=0.))
+                                              order=3, fill=np.nan))
 
         # Align and pad associated mask arrays as well.
         if commonMask is not None:
@@ -2552,10 +2552,14 @@ class Pipeline(object):
                                                 output_filename=os.path.splitext(os.path.basename(self.fileList[ind]))[0])
                         if ref_star_mask is not None:
                             # Reformat the output slightly to an ndarray.
-                            ref_star_mask = np.array(ref_star_mask)
-                        sourceMasks[ind] += ref_star_mask
+                            ref_star_mask = np.array(ref_star_mask.data, dtype=bool)
+                            sourceMasks[ind] += ref_star_mask
+                        else:
+                            self.logger.warning("Reference image auto star "\
+                                                "mask could not be made")
                     else:
-                        self.logger.info("Auto star masking is OFF")
+                        self.logger.info("Reference image auto star masking "\
+                                         "is OFF")
                         ref_star_mask = None
 
 

@@ -83,30 +83,37 @@ def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3,
     if finalYX is None:
         finalYX = np.array(img.shape)//2
 
-    # # Convert all NaNs to 0 (interpolate.shift below won't handle NaNs well).
-    # imgClean = np.nan_to_num(img)
+    refYX_round = np.floor(refYX).astype(int)
+    finalYX_round = np.floor(finalYX).astype(int)
+
+    if not np.all(finalYX_round == finalYX):
+        raise ValueError("HELP!!! Image alignment with align.shift_pix_to_pix"\
+                         " ONLY works with final center coordinates (finalYX)"\
+                         " that are whole integer pixels, e.g., "\
+                         "[1024.0, 1024.0]. Sorry!")
 
     if outputSize is not None:
-        mat = np.zeros(outputSize) + fill
-        mat[:img.shape[0], :img.shape[1]] = img.copy()
+        # Do the sub-pixel shift first.
+        sh_y, sh_x = refYX_round - refYX
+        imgShift_sp = interpolation.shift(img.copy(), [sh_y, sh_x], order=order,
+                                         mode='constant', cval=fill)
+        imgShift = np.zeros(outputSize) + fill
+        # Finally, do the integer-pixel bulk shift by inserting the shifted
+        # image into the padded output array.
+# FIX ME!!! ONLY WORKS for whole integer finalYX coordinates right now.
+        # scipy.ndimage.interpolation.shift uses a spline interpolation of the
+        # requested order.
+        imgShift[finalYX_round[0]-refYX_round[0]:finalYX_round[0]-refYX_round[0]+imgShift_sp.shape[0],
+                 finalYX_round[1]-refYX_round[1]:finalYX_round[1]-refYX_round[1]+imgShift_sp.shape[1]] = imgShift_sp
     else:
-        mat = img
+        sh_y = finalYX[0] - refYX[0]
+        sh_x = finalYX[1] - refYX[1]
 
-    sh_y = finalYX[0] - refYX[0]
-    sh_x = finalYX[1] - refYX[1]
-
-    # Shift the array to put coords at new_cen.
-    # scipy.ndimage.interpolation.shift uses a spline interpolation of the
-    # requested order.
-    imgShift = interpolation.shift(mat, [sh_y, sh_x], order=order,
-                                   mode='constant', cval=fill)
-
-    # # If trimming image size, put the star at the center of the trimmed array
-    # # so trimmed size is (2*size_out + 1, 2*size_out + 1).
-    # if size_out is not None:
-    #   im_aligned = im_aligned[new_cen[0]-size_out[0]:new_cen[0]+size_out[0]+1,
-    #                           new_cen[1]-size_out[1]:new_cen[1]+size_out[1]+1]
-    #   new_cen = size_out
+        # Shift the array to put coords at new_cen.
+        # scipy.ndimage.interpolation.shift uses a spline interpolation of the
+        # requested order.
+        imgShift = interpolation.shift(img, [sh_y, sh_x], order=order,
+                                       mode='constant', cval=fill)
 
     return imgShift
 
