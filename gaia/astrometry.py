@@ -329,8 +329,15 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
 
     # Abandon if no Gaia stars were identified.
     if len(include_indx) == 0:
-        print("*** WARNING: No Gaia stars found in the image. Skipping Gaia astrometry. ***")
+        print("\n*** WARNING: No Gaia stars found in the image. "\
+              "Skipping Gaia astrometry. ***")
         return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+    elif len(include_indx) < 3:
+        print(f"\n*** WARNING: Only {len(include_indx)} Gaia star(s) found in"\
+              " the image. Gaia astrometry may be inaccurate or imprecise. "\
+              "***\n")
+    else:
+        print(f"{len(include_indx)} Gaia stars found in the image.")
 
     print("Running Gaia MCMC...")
     nsteps = 100

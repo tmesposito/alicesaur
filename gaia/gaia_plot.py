@@ -43,6 +43,12 @@ def plot_fits(data_table, include_indx, sky_pos, sky_cov, px_pos, px_cov,
 
     fig, ax = plt.subplots(n_stars, 6, figsize=(12, 2.0*float(n_stars)))
 
+    try:
+        if ax.ndim == 1:
+            ax = [ax]
+    except:
+        pass
+
     n_steps, n_walkers, n_dim = samples.shape
 
     min_ind = np.unravel_index(np.nanargmax(lnp), lnp.shape)
