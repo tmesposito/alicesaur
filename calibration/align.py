@@ -103,8 +103,22 @@ def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3,
 # FIX ME!!! ONLY WORKS for whole integer finalYX coordinates right now.
         # scipy.ndimage.interpolation.shift uses a spline interpolation of the
         # requested order.
-        imgShift[finalYX_round[0]-refYX_round[0]:finalYX_round[0]-refYX_round[0]+imgShift_sp.shape[0],
-                 finalYX_round[1]-refYX_round[1]:finalYX_round[1]-refYX_round[1]+imgShift_sp.shape[1]] = imgShift_sp
+        # Handle cases where the input image will go off the edge of the output
+        # array's dimensions.
+        if finalYX_round[0]-refYX_round[0]+imgShift_sp.shape[0] > imgShift.shape[0]:
+            upper_index_0 = imgShift.shape[0]
+            trim_0 = upper_index_0 - (finalYX_round[0]-refYX_round[0]+imgShift_sp.shape[0])
+            imgShift_sp = imgShift_sp[:trim_0, :]
+        else:
+            upper_index_0 = finalYX_round[0]-refYX_round[0]+imgShift_sp.shape[0]
+        if finalYX_round[1]-refYX_round[1]+imgShift_sp.shape[1] > imgShift.shape[1]:
+            upper_index_1 = imgShift.shape[1]
+            trim_1 = upper_index_1 - (finalYX_round[1]-refYX_round[1]+imgShift_sp.shape[1])
+            imgShift_sp = imgShift_sp[:, :trim_1]
+        else:
+            upper_index_1 = finalYX_round[1]-refYX_round[1]+imgShift_sp.shape[1]
+        imgShift[finalYX_round[0]-refYX_round[0]:upper_index_0,
+                 finalYX_round[1]-refYX_round[1]:upper_index_1] = imgShift_sp
     else:
         sh_y = finalYX[0] - refYX[0]
         sh_x = finalYX[1] - refYX[1]
