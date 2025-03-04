@@ -34,16 +34,14 @@ def correct_distortion(imgPathList, outputPaths="", refDir=None, inst='stis',
     if refDir is not None:
         os.environ['oref'] = os.path.abspath(refDir)
     else:
-        if os.environ.get('oref') is None:
-            # Must have trailing slash in 'oref' path.
-            default_oref_path = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/distortion')), '')
-            os.environ['oref'] = default_oref_path
-            print("\nWARNING: Environment variable 'oref' was not defined"\
-                  " so distortion correction may fail. "\
-                  f"Resetting 'oref' to {default_oref_path}.\nYou may need"\
-                  " to set it manually to the path to the IDC table file's"\
-                  " parent directory or provide that path here with the"\
-                  " refDir argument.")
+        # Must have trailing slash in 'oref' path.
+        default_oref_path = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/distortion')), '')
+        os.environ['oref'] = default_oref_path
+        print("\nWARNING: Resetting environment variable 'oref' to "\
+              f"{default_oref_path}.\nIf distortion correction fails, you "\
+              "may need to manually give the path to your IDC table files in "\
+              "the Pipeline.run() call to correct_distortion via its refDir "\
+              "argument.")
 
     success_list = undistort_images(imgPathList, outputPaths=outputPaths,
                                     overwrite=overwrite)
