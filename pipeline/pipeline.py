@@ -3087,25 +3087,34 @@ class Pipeline(object):
                                             r_max=400, rdelta=3)
                     # Extrapolate background noise into inner regions where we
                     # don't sample it well or at all but we do have data.
-                    stdStrip1 = gaussian_filter(stdMap[int(self.alignStar[0]),
-                                                       int(self.alignStar[1]-70):int(self.alignStar[1])], 3)
-                    stdStrip2 = gaussian_filter(stdMap[int(self.alignStar[0]),
-                                                       int(self.alignStar[1]+1):int(self.alignStar[1]+1+70)], 3)
-                    stdStrip3 = gaussian_filter(stdMap[int(self.alignStar[0]-70):int(self.alignStar[0]),
-                                                       int(self.alignStar[1])], 3)
-                    stdStrip4 = gaussian_filter(stdMap[int(self.alignStar[0]+1):int(self.alignStar[0]+1+70),
-                                                       int(self.alignStar[1])], 3)
-                    stdStrip = np.nanmean([stdStrip1, stdStrip2[::-1], stdStrip3, stdStrip4[::-1]], axis=0)
+                    try:
+                        stdStrip1 = gaussian_filter(stdMap[int(self.alignStar[0]),
+                                                           int(self.alignStar[1]-70):int(self.alignStar[1])], 3)
+                        stdStrip2 = gaussian_filter(stdMap[int(self.alignStar[0]),
+                                                           int(self.alignStar[1]+1):int(self.alignStar[1]+1+70)], 3)
+                        stdStrip3 = gaussian_filter(stdMap[int(self.alignStar[0]-70):int(self.alignStar[0]),
+                                                           int(self.alignStar[1])], 3)
+                        stdStrip4 = gaussian_filter(stdMap[int(self.alignStar[0]+1):int(self.alignStar[0]+1+70),
+                                                           int(self.alignStar[1])], 3)
+                        stdStrip = np.nanmean([stdStrip1, stdStrip2[::-1], stdStrip3, stdStrip4[::-1]], axis=0)
 
-                    fe = interp1d(np.arange(self.alignStar[1]-70, self.alignStar[1])[~np.isnan(stdStrip)],
-                                  gaussian_filter(stdMap[int(self.alignStar[0]), int(self.alignStar[1]-70):int(self.alignStar[1])], 3)[~np.isnan(stdStrip)],
-                                  kind='linear', fill_value="extrapolate")
-                    interpStd = fe(np.arange(self.alignStar[1]-70, self.alignStar[1]))
-                    for rr in range(1, 30): #len(interpStd)):
-                        try:
-                            stdMap[(radii >= rr - 0.5) & (radii < rr + 0.5)] = interpStd[::-1][rr]
-                        except:
-                            stdMap[(radii >= rr - 0.5) & (radii < rr + 0.5)] = np.nan
+                        fe = interp1d(np.arange(self.alignStar[1]-70, self.alignStar[1])[~np.isnan(stdStrip)],
+                                      gaussian_filter(stdMap[int(self.alignStar[0]), int(self.alignStar[1]-70):int(self.alignStar[1])], 3)[~np.isnan(stdStrip)],
+                                      kind='linear', fill_value="extrapolate")
+                        interpStd = fe(np.arange(self.alignStar[1]-70, self.alignStar[1]))
+                        for rr in range(1, 30):
+                            try:
+                                stdMap[(radii >= rr - 0.5) & (radii < rr + 0.5)] = interpStd[::-1][rr]
+                            except:
+                                stdMap[(radii >= rr - 0.5) & (radii < rr + 0.5)] = np.nan
+                                self.logger.debug("Failed to insert interpolated "\
+                                                  f"error map at r={rr} pix")
+                        self.logger.debug("Successfully interpolated error "\
+                                          "map's inner region (r<30 pix)")
+                    except:
+                        self.logger.warning("FAILED to interpolate standard "\
+                                            "deviation map inner regions.")
+                        self.logger.exception("Interpolation exception: ")
                     # Combine noise terms.
                     errorMaps_electrons.append(np.sqrt(np.nansum([poissonMap**2, stdMap**2], axis=0)))
 
