@@ -2803,44 +2803,47 @@ class Pipeline(object):
         if self.do_gaia and (psfsubPath is not None):
             self.logger.info("*** Running GAIA ASTROMETRY on individual PSF-subtracted images ***\n")
             self.targSimbad = utils.format_target_name(self.targ)
-            gaiaID = get_gaia_id(self.targSimbad)
-            if gaiaID is not None:
-                gaiaIDNumber = int(gaiaID.split(' ')[-1])
-                target_rv = [0., 0.]
-                all_gaia_out = []
+            try:
+                gaiaID = get_gaia_id(self.targSimbad)
+                if gaiaID is not None:
+                    gaiaIDNumber = int(gaiaID.split(' ')[-1])
+                    target_rv = [0., 0.]
+                    all_gaia_out = []
 
 # FIX ME!!! Still using the axc headers for Gaia astrometry below.
 
-                for ii, img in enumerate(self.psfSubImgs):
-# # TEMP OFF!!!
-#                     # Retrieve the PSF cube header containing WCS info.
-#                     psfsubHdr = fits.getheader(psfsubPath, ext=('SCI', 1+ii))
-                    # Star input order is x,y
-                    # Output order is:
-                    # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
-                    # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
-                    # final_tn_std, ra_target, de_target, plx_target
-                    gaia_out = main(os.path.splitext(os.path.basename(psfsubPath))[0] + f"_{ii}",
-                                    self.instrument, gaiaIDNumber, target_rv,
-                                    self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
-                                    exclude_extra=[], im=img, hdr=self.sciHdrs[ii][1],
-                                    out_dir=self.dataDir)
-                    all_gaia_out.append(gaia_out)
-                    self.logger.info(f"PSF-sub image {ii} Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
+                    for ii, img in enumerate(self.psfSubImgs):
+    # # TEMP OFF!!!
+    #                     # Retrieve the PSF cube header containing WCS info.
+    #                     psfsubHdr = fits.getheader(psfsubPath, ext=('SCI', 1+ii))
+                        # Star input order is x,y
+                        # Output order is:
+                        # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
+                        # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
+                        # final_tn_std, ra_target, de_target, plx_target
+                        gaia_out = main(os.path.splitext(os.path.basename(psfsubPath))[0] + f"_{ii}",
+                                        self.instrument, gaiaIDNumber, target_rv,
+                                        self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
+                                        exclude_extra=[], im=img, hdr=self.sciHdrs[ii][1],
+                                        out_dir=self.dataDir)
+                        all_gaia_out.append(gaia_out)
+                        self.logger.info(f"PSF-sub image {ii} Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
 
-                    # Sanitize the Gaia output for FITS header writing.
-                    gaia_out = np.array(gaia_out)
-                    for jj, go in enumerate(gaia_out):
-                        if np.isnan(go):
-                            gaia_out[jj] = -999
-                    add_header(psfsubPath, 1 + ii, gaia_out[10], gaia_out[11],
-                               gaia_out[12], gaia_out[0], gaia_out[1],
-                               gaia_out[5], gaia_out[6], gaia_out[4],
-                               gaia_out[9], gaia_out[2], gaia_out[3],
-                               gaia_out[7], gaia_out[8])
-            else:
-                self.logger.error("*** FAILED to measure Gaia astrometry: "\
-                      f"invalid Gaia ID number for target ({self.targSimbad})\n")
+                        # Sanitize the Gaia output for FITS header writing.
+                        gaia_out = np.array(gaia_out)
+                        for jj, go in enumerate(gaia_out):
+                            if np.isnan(go):
+                                gaia_out[jj] = -999
+                        add_header(psfsubPath, 1 + ii, gaia_out[10], gaia_out[11],
+                                   gaia_out[12], gaia_out[0], gaia_out[1],
+                                   gaia_out[5], gaia_out[6], gaia_out[4],
+                                   gaia_out[9], gaia_out[2], gaia_out[3],
+                                   gaia_out[7], gaia_out[8])
+                else:
+                    self.logger.error("*** FAILED to measure Gaia astrometry from PSF-subtracted image(s): "\
+                          f"invalid Gaia ID number for target ({self.targSimbad})\n")
+            except:
+                self.logger.exception("*** FAILED to measure Gaia astrometry from PSF-subtracted image(s): ")
 
         if psfSubMode.lower() in ["adi", "rdi"]:
             # Apply mask for occulters and diffraction spikes to
@@ -2984,47 +2987,35 @@ class Pipeline(object):
             if self.do_gaia and (finalPath is not None):
                 self.logger.info("*** Running GAIA ASTROMETRY on final image ***\n")
                 self.targSimbad = utils.format_target_name(self.targ)
-                gaiaID = get_gaia_id(self.targSimbad)
-                if gaiaID is not None:
-                    target_rv = [0., 0.]
-                    # Star input order is x,y
-                    # Output order is:
-                    # final_x_median, final_y_median, final_ps_x_median, final_ps_y_median,
-                    # final_tn_median, final_x_std, final_y_std, final_ps_x_std, final_ps_y_std,
-                    # final_tn_std
-# # FIX ME!!! Need to add WCS header keywords to final image for this to work.
-#                     from astropy.wcs import WCS
-#                     wcs_psfsub0 = WCS(self.sciHdrs[0][1])
-#                     rotation_matrix = np.array([[np.cos(np.radians(self.orientats[0])), -np.sin(np.radians(self.orientats[0]))],
-#                                                 [np.sin(np.radians(self.orientats[0])), np.cos(np.radians(self.orientats[0]))]])
-#                     temp_wcs = wcs_psfsub0.copy()
-#                     temp_wcs.wcs.cd = wcs_psfsub0.wcs.cd*rotation_matrix
-#                     temp_hdr = fits.getheader(finalPath).copy()
-#                     temp_hdr = temp_hdr + temp_wcs.to_header()
+                try:
+                    gaiaID = get_gaia_id(self.targSimbad)
+                    if gaiaID is not None:
+                        target_rv = [0., 0.]
+                        # Retrieve the final image header containing WCS info.
+                        finalHdr = fits.getheader(finalPath, ext=('SCI', 1))
+                        gaia_out = main(f"{self.targ}_{self.obsMode}_{self.inputType}_final",
+                                        self.instrument, gaiaIDNumber, target_rv,
+                                        self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
+                                        exclude_extra=[], im=finalImg, hdr=finalHdr,
+                                        out_dir=self.dataDir)
+                        all_gaia_out.append(gaia_out)
+                        self.logger.info(f"Final image: Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
 
-                    # Retrieve the final image header containing WCS info.
-                    finalHdr = fits.getheader(finalPath, ext=('SCI', 1))
-                    gaia_out = main(f"{self.targ}_{self.obsMode}_{self.inputType}_final",
-                                    self.instrument, gaiaIDNumber, target_rv,
-                                    self.stars[self.sciInds][ii][::-1], gaia_catalogue='DR3',
-                                    exclude_extra=[], im=finalImg, hdr=finalHdr,
-                                    out_dir=self.dataDir)
-                    all_gaia_out.append(gaia_out)
-                    self.logger.info(f"Final image: Gaia X median: {gaia_out[0]:.2f} +/- {gaia_out[5]:.2f}, Gaia Y median: {gaia_out[1]:.2f} +/- {gaia_out[6]:.2f}")
-
-                    # Sanitize the Gaia output for FITS header writing.
-                    gaia_out = np.array(gaia_out)
-                    for ii, go in enumerate(gaia_out):
-                        if np.isnan(go):
-                            gaia_out[ii] = -999
-                    add_header(finalPath, 1, gaia_out[10],
-                               gaia_out[11], gaia_out[12], gaia_out[0],
-                               gaia_out[1],gaia_out[5], gaia_out[6],
-                               gaia_out[4],gaia_out[9], gaia_out[2],
-                               gaia_out[3],gaia_out[7], gaia_out[8])
-                else:
-                    self.logger.error("*** FAILED to measure Gaia astrometry from final image: "\
-                          f"invalid Gaia ID number for target ({self.targSimbad})\n")
+                        # Sanitize the Gaia output for FITS header writing.
+                        gaia_out = np.array(gaia_out)
+                        for ii, go in enumerate(gaia_out):
+                            if np.isnan(go):
+                                gaia_out[ii] = -999
+                        add_header(finalPath, 1, gaia_out[10],
+                                   gaia_out[11], gaia_out[12], gaia_out[0],
+                                   gaia_out[1],gaia_out[5], gaia_out[6],
+                                   gaia_out[4],gaia_out[9], gaia_out[2],
+                                   gaia_out[3],gaia_out[7], gaia_out[8])
+                    else:
+                        self.logger.error("*** FAILED to measure Gaia astrometry from final image: "\
+                              f"invalid Gaia ID number for target ({self.targSimbad})\n")
+                except:
+                    self.logger.exception("*** FAILED to measure Gaia astrometry from final image: ")
 
 # FIX ME!!! Compute error maps for each version of the final image.
 # Currently only compute for the version with no radial profile subtractions at all.
