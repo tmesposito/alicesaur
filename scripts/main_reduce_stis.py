@@ -167,7 +167,7 @@ if __name__ == "__main__":
 
         # Determine the highest level intermediate product present and
         # use that as the inputType for the second iteration.
-        inputType_options = ['axc', 'axf', 'axt', 'xfc', 'xft', 'flc', 'flt']
+        inputType_options = ['xfc', 'xft', 'flc', 'flt']
         for it in inputType_options:
             files_present = glob(os.path.join(pl.dataDir, f"*_{it}.fits"))
             if len(files_present) > 0:
