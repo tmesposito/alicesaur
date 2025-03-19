@@ -112,7 +112,7 @@ def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
         return radProf2d
 
 
-def dither_image(im, star, ditherPos):
+def dither_image(im, star, ditherPos, fill_val=0):
     """
     Shift an image by interpolation; primarily within a dither pattern.
 
@@ -120,9 +120,12 @@ def dither_image(im, star, ditherPos):
     ----------
     ditherPos: array
         [dy, dx] shifts of the image center.
+
+    fill_Val: scalar
+        Value with which to fill pixels created by interpolation. Default is 0.
     """
 
-    imDithered = shift(im, ditherPos, order=1, cval=0.)
+    imDithered = shift(im, ditherPos, order=1, cval=fill_val)
 
     return imDithered
 
@@ -249,9 +252,12 @@ def dither_residuals(ps, sci, ref, refMask, refStar, verbose=False):
     pos = np.array([ps[0], ps[1]])
 
     # Clean NaN's from ref before dither, then replace them after dither.
-    refDithered = dither_image(ref, refStar, pos)
+    nans_orig = np.isnan(ref)
+    ref[nans_orig] = 0
+    refDithered = dither_image(ref, refStar, pos, fill_val=0)
     refDitheredMasked = refDithered.copy()
     refDitheredMasked[refMask] = np.nan
+    refDitheredMasked[nans_orig] = np.nan
     res = sci - refDitheredMasked
     chi2 = np.nansum(res**2)
 
