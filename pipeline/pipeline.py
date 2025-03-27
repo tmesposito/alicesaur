@@ -1197,7 +1197,7 @@ class Pipeline(object):
         # Average together the CRSPLITS, which does NOT conserve the flux.
         unifiedImgs = np.nanmean(self.workingImgs, axis=1)
         # Multiply the averaged images by the number of CRSPLITS to
-        # conserve the total flux of the CRSPLIT-integrated images.
+        # conserve the total flux of the CRSPLIT-integrated images in counts.
         unifiedImgs *= n_crsplits.reshape(unifiedImgs.shape[0], 1, 1)
 
         # Update headers for the unified images to reflect correct
@@ -2391,10 +2391,14 @@ class Pipeline(object):
     # ========== CALIBRATE FLUX ========== #
         # Convert intensity to counts per second.
         newUnit = 'COUNTS S-1'
-        # newUnit = 'mJy arcsec-2'
+        if self.inputType == 'sx2':
+            intensityInputType = 'sx2'
+        else:
+            intensityInputType = 'flt'
         self.workingImgs = convert_intensity(self.workingImgs, self.allHdrs,
                                     unitEnd=newUnit,
-                                    pscale=self.pscale) # [counts/s]
+                                    pscale=self.pscale,
+                                    inputType=intensityInputType) # [counts/s]
         self.bunit = newUnit
         self.logger.info("Converted image intensity units to {}".format(newUnit))
 

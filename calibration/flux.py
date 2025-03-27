@@ -9,7 +9,8 @@ from alicesaur import utils
 
 
 def convert_intensity(imgs, hdrs, unitStart=None, unitEnd='counts s-1',
-                      gain=None, exptime=None, nCombine=None, pscale=0.0506):
+                      gain=None, exptime=None, nCombine=None, pscale=0.0506,
+                      inputType='flt'):
     """
     Convert image from one set of intensity units (aka "flux) to another).
     Possible unit strings are 'counts', 'counts s-1', 'e-', 'jy', 'mjy',
@@ -28,6 +29,7 @@ def convert_intensity(imgs, hdrs, unitStart=None, unitEnd='counts s-1',
         nCombine: int, number of constituent images with exposure time exptime.
         pscale: float, pixel scale of images in [arcsec/pixel]. Defaults
             to STIS' 0.0506 arcsec/pixel.
+        inputType: str, either 'flt' or 'sx2'.
     """
 
     # Redefine some variables for nicer variable names later.
@@ -41,11 +43,12 @@ def convert_intensity(imgs, hdrs, unitStart=None, unitEnd='counts s-1',
         else:
             bunit = unitStart.lower()
 
-        # EXPTIME in sx2 header is total (summed) exposure time per sx2 image (NOT per
-        # NCOMBINE coadded constituent frames.
-        # Paul has confirmed this with his own tests.
+        # NOTE: EXPTIME has different meanings in flt and sx2 FITS headers.
+        # flt: EXPTIME is the exposure time per CRSPLIT.
+        # sx2: EXPTIME is the total (summed) exposure time per sx2 image,
+        # NOT the time per NCOMBINE coadded constituent frames.
         if nCombine_force is None:
-            nCombine = hdrs[ii][1]['NCOMBINE'] # 
+            nCombine = hdrs[ii][1]['NCOMBINE']
         else:
             nCombine = nCombine_force
         if exptime_force is None:
@@ -60,13 +63,22 @@ def convert_intensity(imgs, hdrs, unitStart=None, unitEnd='counts s-1',
                 gain = 4.016 # [counts/e-]
         else:
             gain = gain_force
+        # Compute the total integration time in s, which we use as the main
+        # factor to convert from COUNTS to COUNTS S^-1.
+        if inputType.lower() == 'flt':
+            integration_s = exptime*nCombine
+        elif inputType.lower() == 'sx2':
+            integration_s = exptime
+        else:
+            print("\n*** ERROR: convert_intensity can only accept inputType "\
+                  "of 'flt' or 'sx2'. Exiting. ***\n")
+            sys.exit(1)
 
         # First, convert units to COUNTS as a uniform starting place.
         if bunit == 'counts':
             pass
         elif bunit == 'counts s-1':
-            # imgs[ii] *= (exptime/nCombine) # WRONG!!! Paul confirmed this is incorrect.
-            imgs[ii] *= exptime # [counts]
+            imgs[ii] *= integration_s # [counts]
             hdrs[ii][1]['BUNIT'] = 'COUNTS'
         elif bunit == 'e-':
             imgs[ii] *= gain
@@ -74,9 +86,8 @@ def convert_intensity(imgs, hdrs, unitStart=None, unitEnd='counts s-1',
 
         # Now do the final unit conversion.
         if unitEnd.lower() == 'counts s-1':
-            # Divide by integration time per image (exptime/nCombine).
-            # imgs[ii] /= (exptime/nCombine) # WRONG!!! Paul confirmed this is incorrect.
-            imgs[ii] /= exptime # [counts s-1]
+            # Divide by integration time per image.
+            imgs[ii] /= integration_s # [counts s^-1]
             hdrs[ii][1]['BUNIT'] = 'COUNTS S-1'
         elif unitEnd.lower() == 'e-':
             imgs[ii] /= gain # [e-]
@@ -85,33 +96,38 @@ def convert_intensity(imgs, hdrs, unitStart=None, unitEnd='counts s-1',
         # GAINCCD = 4 (agreed with Paul).
         # 1 count s-1 pixel-1 (with GAIN=4) = 4.55 x 10-7 Jy
         elif unitEnd.lower() == 'jy':
-            # imgs[ii] /= (exptime/nCombine) # WRONG!!! Paul confirmed this is incorrect.
-            imgs[ii] /= exptime # convert to counts s^-1 first
+            imgs[ii] /= integration_s # convert to counts s^-1 first
             if gain == 4.016:
                 imgs[ii] *= 4.55e-7 # [Jy]
             else:
                 print("*** HELP!! No calibration to Jy provided for gains other than 4 (or 4.016). Edit stis_disk_process.convert_intensity() function.")
                 sys.exit(1)
         elif unitEnd.lower() == 'jy arcsec-2':
-            imgs[ii] /= exptime # convert to counts s^-1 first
+            imgs[ii] /= integration_s # convert to counts s^-1 first
             if gain == 4.016:
                 imgs[ii] *= (4.55e-7 / pscale**2) # [Jy arcsec-2]
             else:
-                print("*** HELP!! No calibration to Jy provided for gains other than 4 (or 4.016). Edit stis_disk_process.convert_intensity() function.")
+                print("\n*** HELP!! No calibration to Jy provided for gains "\
+                      "other than 4 (or 4.016). Edit "\
+                          "stis_disk_process.convert_intensity() function.\n")
                 sys.exit(1)
         elif unitEnd.lower() == 'mjy':
-            imgs[ii] /= exptime # convert to counts s^-1 first
+            imgs[ii] /= integration_s # convert to counts s^-1 first
             if gain == 4.016:
                 imgs[ii] *= 4.55e-7 * 1e3 # [mJy]
             else:
-                print("*** HELP!! No calibration to Jy provided for gains other than 4 (or 4.016). Edit stis_disk_process.convert_intensity() function.")
+                print("\n*** HELP!! No calibration to Jy provided for gains "\
+                      "other than 4 (or 4.016). Edit "\
+                          "stis_disk_process.convert_intensity() function.\n")
                 sys.exit(1)
         elif unitEnd.lower() == 'mjy arcsec-2':
-            imgs[ii] /= exptime # convert to counts s^-1 first
+            imgs[ii] /= integration_s # convert to counts s^-1 first
             if gain == 4.016:
                 imgs[ii] *= (4.55e-7 * 1e3 / pscale**2) # [mJy arcsec-2]
             else:
-                print("*** HELP!! No calibration to Jy provided for gains other than 4 (or 4.016). Edit stis_disk_process.convert_intensity() function.")
+                print("\n*** HELP!! No calibration to Jy provided for gains "\
+                      "other than 4 (or 4.016). Edit "\
+                      "stis_disk_process.convert_intensity() function.\n")
                 sys.exit(1)
 
     return imgs
@@ -157,7 +173,7 @@ def convert_intensity_stis(img, unitStart=None, unitEnd='counts s-1',
     if unitEnd.lower() == 'counts s-1':
         # Divide by integration time per image (exptime/nCombine).
         # imgConv /= (exptime/nCombine) # <-- WRONG!!! Paul confirmed this is incorrect.
-        imgConv /= exptime # [counts s-1]
+        imgConv /= exptime # [counts s^-1]
     elif unitEnd.lower() == 'e-':
         imgConv /= gain # [e-]
     # From Schneider et al. : let's adopt this for all STIS images with
