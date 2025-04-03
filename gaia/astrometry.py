@@ -57,11 +57,15 @@ def lnlike(p, sky_pos, sky_cov, px_pos, px_cov, include_indx):
   
 def lnprior(p):
 
+    if (p[0] < 0):
+        return -np.inf
+    if (p[1] < 0):
+        return -np.inf
     if (p[2] <= 5) | (p[2] > 200.0):
         return -np.inf
     if (p[3] <= 5) | (p[3] > 200.0):
         return -np.inf
-    if (p[4] < 0.0) | (p[4] > (2.0*np.pi)):
+    if (p[4] < -2.1 *np.pi) | (p[4] > (2.1*np.pi)):
         return -np.inf
 
     return 0
@@ -82,6 +86,12 @@ def mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, guess_x, guess_y, guess
     pos0 = np.zeros((nwalkers, ndim))
     for k in range(0, ndim):
         pos0[..., k] = np.random.normal(p0[k], dp[k], nwalkers)
+
+    # Sanitize initial positions by regenerating any that fail the prior.
+    for ii, p0_i in enumerate(pos0):
+        while np.isinf(lnprior(pos0[ii])):
+            for k in range(0, ndim):
+                pos0[ii] = np.random.normal(p0[k], dp[k])
 
     args = (sky_pos, sky_cov, px_pos, px_cov, include_indx)
 
@@ -271,8 +281,8 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
         # Exclude sources near or outside the edges of the image array.
         if not ((20 <= x[i] <= s[1] - 20) and (20 <= y[i] <= s[0] - 20)):
             exclude_id += [source_id[i]]
-        # Exclude sources centered on masked pixels of the image array.
-        elif (np.isnan(im[y_int, x_int]) | (im[y_int, x_int] == 0.0)):
+        # Exclude sources vignetted by masked pixels of the image array.
+        elif (np.any(np.isnan(im[y_int-20:y_int+21, x_int-20:x_int+21])) | (im[y_int, x_int] == 0.0)):
             # TODO - check mask array
             exclude_id += [source_id[i]]
         else:
@@ -343,7 +353,9 @@ def main(im_path, inst, target_id, target_rv, target_xy, gaia_catalogue='DR3',
     nsteps = 100
     nburn = 25
 
-    samples, lnp, blobs = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx, target_xy[0], target_xy[1], guess_ps, guess_tn, nsteps=nsteps)
+    samples, lnp, blobs = mcmc(sky_pos, sky_cov, px_pos, px_cov, include_indx,
+                               target_xy[0], target_xy[1], guess_ps, guess_tn,
+                               nsteps=nsteps)
 
     # Generate list of chi2, to remove outliers in a second run
     # Updated star center could be used as input for the second run

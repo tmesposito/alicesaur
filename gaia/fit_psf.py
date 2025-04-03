@@ -111,7 +111,7 @@ def fit(im, x, y, source_id, exclude_id, star_errors, offset, inflation,
                                                 tied = {'y_stddev': tie_std},
                                                 fixed = {'theta': True})
 
-                least_sq_fit = fitting.LevMarLSQFitter()
+                least_sq_fit = fitting.LMLSQFitter(calc_uncertainties=False)
                 yarr,xarr = np.indices(stamp2.shape)
                 best_fit_model = least_sq_fit(gauss_model, xarr, yarr, stamp2, weights=weight2)
 

@@ -335,14 +335,17 @@ class Pipeline(object):
             self.logger.warning(f"*** NO FITS files found at {self.dataDir + '*_' + suffix +'.fits'} *** !!\n")
         
 
-    def make_star_mask(self, im=None, output_filename='image'):
+    def make_star_mask(self, im=None, input_filename='segmap',
+                       star=(1024, 1024), exclude_radius=120):
         """
         Execute astrosniff and return the mask 2D array.
         """
-        self.logger.info("Starting masking process...")
+        self.logger.info("Starting auto star masking process...")
         try:
             seg_map = astrosniff.main_masking(data=im, dataDir=self.dataDir,
-                                              output_filename=output_filename)
+                                              input_filename=input_filename,
+                                              star=star,
+                                              exclude_radius=exclude_radius)
             if seg_map is not None:
                 self.logger.info("Auto star masking process completed successfully.")
             else:
@@ -2546,18 +2549,28 @@ class Pipeline(object):
                                                 exclusions=exclusionsRef,
                                                 cen=self.alignStar, cenOffset=self.alignStarOffsets[ind],
                                                 paOffset=0, spikeAngles=self.spikeAngles)
-# TESTING!!!
+
                 # Add star mask to sourceMasks, rotated to the correct PA.
                 if not self.noAutoMask:
-                    # Run astrosniff to create the 2D mask array for each ref
-                    # image.
+                    # Run astrosniff to create the 2D auto star mask array for
+                    # each reference PSF image.
                     if not self.noAutoMask:
-                        ref_star_mask = self.make_star_mask(im=self.workingImgs[ind],
-                                                output_filename=os.path.splitext(os.path.basename(self.fileList[ind]))[0])
+                        # Do a "reverse PSF subtraction" by subtracting a
+                        # median of the science images from the reference PSF
+                        # image so we can locate and mask the stars in the
+                        # reference image without the primary PSF in the way.
+                        comboRefSciMasks = psfSubMasks[self.sciInds] | np.any(psfSubMasks[self.refInds], axis=0)
+                        ratio_ref_sci_0 = np.nansum(self.workingImgs[ind][~comboRefSciMasks[0]]) / np.nansum(np.nanmedian(self.workingImgs[self.sciInds], axis=0)[~comboRefSciMasks[0]])
+                        ref_star_subtracted = self.workingImgs[ind] - 1.1*np.clip(ratio_ref_sci_0*np.nanmedian(self.workingImgs[self.sciInds], axis=0), 0, np.inf)
+                        # Make the actual star mask here..
+                        ref_star_mask = self.make_star_mask(im=ref_star_subtracted,
+                                                input_filename=os.path.splitext(os.path.basename(self.fileList[ind]))[0] + '_refpsf',
+                                                star=self.alignStar,
+                                                exclude_radius=min((sub_r_out, 200)))
                         if ref_star_mask is not None:
                             # Reformat the output slightly to an ndarray.
                             ref_star_mask = np.array(ref_star_mask.data, dtype=bool)
-                            sourceMasks[ind] += ref_star_mask
+                            psfSubMasks[ind] += ref_star_mask
                         else:
                             self.logger.warning("Reference image auto star "\
                                                 "mask could not be made")
@@ -2804,6 +2817,7 @@ class Pipeline(object):
 
         # Perform astrometry on occulted primary using background star
         # Gaia positions.
+        all_gaia_out = []
         if self.do_gaia and (psfsubPath is not None):
             self.logger.info("*** Running GAIA ASTROMETRY on individual PSF-subtracted images ***\n")
             self.targSimbad = utils.format_target_name(self.targ)
@@ -2812,7 +2826,6 @@ class Pipeline(object):
                 if gaiaID is not None:
                     gaiaIDNumber = int(gaiaID.split(' ')[-1])
                     target_rv = [0., 0.]
-                    all_gaia_out = []
 
 # FIX ME!!! Still using the axc headers for Gaia astrometry below.
 
@@ -2994,6 +3007,7 @@ class Pipeline(object):
                 try:
                     gaiaID = get_gaia_id(self.targSimbad)
                     if gaiaID is not None:
+                        gaiaIDNumber = int(gaiaID.split(' ')[-1])
                         target_rv = [0., 0.]
                         # Retrieve the final image header containing WCS info.
                         finalHdr = fits.getheader(finalPath, ext=('SCI', 1))

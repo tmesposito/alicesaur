@@ -23,7 +23,8 @@ def plot_overview(im, x, y, source_id, exclude_id, outname='gaia_overview'):
             marker, mec = 'o', 'c'
 
         ax.plot(x[j], y[j], marker, mec=mec, ms=5, mew=0.5, mfc='None')
-        ax.annotate(str(j), xy=(x[j], y[j]), xycoords='data', color=mec, xytext=(4, 4), textcoords='offset points', fontsize=8)
+        ax.annotate(str(j), xy=(x[j], y[j]), xycoords='data', color=mec,
+                    xytext=(2, 2), textcoords='offset points', fontsize=7)
     
     fig.savefig('{}.png'.format(outname), dpi=300, bbox_inches='tight') # TODO: Change to meaningful name
     plt.close('all')
@@ -92,7 +93,7 @@ def plot_fits(data_table, include_indx, sky_pos, sky_cov, px_pos, px_cov,
         h, _, _, _ = ax[j][4].hist2d(pred_x, pred_y, cmap=cm.Greys, bins=(xbins, ybins))
         _ = ax[j][4].contour(gaia_utils.confidence_levels(h.T), [1.99, 2.99, 3.99], extent=[xbins.min(),xbins.max(),ybins.min(),ybins.max()])
 
-        ## And plot pixel measurement
+        # And plot pixel measurement
         _ = ax[j][4].errorbar(px_pos[i][0], px_pos[i][1], 
             xerr=np.sqrt(px_cov[i][0][0]),
             yerr=np.sqrt(px_cov[i][1][1]), fmt='o', color='red', ms=2.0, capsize=5)
@@ -100,6 +101,7 @@ def plot_fits(data_table, include_indx, sky_pos, sky_cov, px_pos, px_cov,
         _ = ax[j][4].xaxis.get_major_formatter().set_useOffset(False)
         _ = ax[j][4].yaxis.get_major_formatter().set_useOffset(False)
 
+        # Write the fits specs on the right of each row.
         try:
             _ = ax[j][5].annotate('{}'.format(data_table['SOURCE_ID'][i]), xy=(0.05, 0.9), xycoords='axes fraction', fontsize=6)
         except:
