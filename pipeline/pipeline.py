@@ -34,7 +34,7 @@ from alicesaur.calibration.distortion import correct_distortion
 from alicesaur.calibration.align import find_star_radon, shift_pix_to_pix
 from alicesaur.calibration.flux import convert_intensity
 from alicesaur.improcess import astrosniff
-from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis
+from alicesaur.improcess.mask import mask_exclusions, mask_spikes_offaxis, clean_image_edges
 from alicesaur.improcess.manipulate import zero_pad, rotate_wcs
 from alicesaur.gaia.astrometry import main
 from alicesaur.gaia.gaia_utils import get_gaia_id, add_header
@@ -2267,6 +2267,21 @@ class Pipeline(object):
                 self.starsAll.append(self.stars)
                 self.starsOriginalAll.append(self.starsOriginal)
                 self.alignStarOffsetsAll.append(self.alignStarOffsets)
+
+                # Clean image top edge if subarrayed because it tends to be
+                # noisy (too bright).
+                try:
+                    if self.workingImgs.shape[2] < 1000:
+                        for jj, img in enumerate(alignImgs):
+                            alignImgs[jj] = clean_image_edges(img, 5,
+                                                        fill_value=np.nan,
+                                                        which_edges=['top'],
+                                                        edge_value=np.nan,
+                                                        star=self.alignStar)
+                        self.logger.info("Trimmed image top edge by 5 pixels "\
+                                         "to remove bright noise")
+                except Exception:
+                    self.logger.exception("FAILED to clean image edges. Proceeding without it.")
 
                 # Placeholder for the CTI correction.
                 if self.inputType == 'flt':

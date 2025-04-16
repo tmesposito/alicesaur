@@ -328,3 +328,70 @@ def show_masks(im, info, infoMode='bar10', imCat='sci', cen=None,
     plt.show()
 
     return
+
+
+def clean_image_edges(im, N_pixels, fill_value=np.nan, which_edges=['top'],
+                      edge_value=np.nan, star=(1024, 1024)):
+    """
+    "Clean" image edge(s) by replacing the pixel values with a given value.
+
+    Parameters
+    ----------
+    im : 2-d array
+        The image to be cleaned.
+    N_pixels : int
+        The number of pixels to "clean" from the image edge.
+    fill_value : float, optional
+        The value with which to fill "cleaned" pixels. The default is NaN.
+    which_edges: list of str, optional
+        Choices include 'top', 'bottom', 'left', 'right' to set which edges
+        are cleaned.
+    edge_value: float, optional
+        The pixel value that defines the edge of the "image"; e.g., if the
+        image is padded by NaN, then you would give edge_value=np.nan.
+    star: list of float or int, optional
+        The star y,x pixel coordinates in the image, or the image center.
+
+    Returns
+    -------
+    The cleaned image.
+
+    """
+
+    top_edge, right_edge = im.shape
+    bottom_edge, left_edge = 0, 0
+
+    # Optionally, we can trim inward from some pre-defined boundary interior
+    # to the array edge, such as a NaN padded edge. Find those boundaries here.
+    # Force the check to only search for boundaries near the star to avoid
+    # trouble from image padding.
+    if edge_value is not None:
+        if np.isnan(edge_value):
+            wh_y = np.where(np.isnan(im[:, int(star[1]) - 20:int(star[1]) + 21]))
+            wh_x = np.where(np.isnan(im[int(star[0]) - 20:int(star[0]) + 21, :]))
+        else:
+            wh_y = np.where(im[:, int(star[1]) - 20:int(star[1]) + 21] == edge_value)
+            wh_x = np.where(im[int(star[0]) - 20:int(star[0]) + 21, :] == edge_value)
+        # breakpoint()
+        if len(wh_y[0]) > 0:
+            if np.min(wh_y[0][wh_y[0] >= star[0]]) > star[0]:
+                top_edge = np.min(wh_y[0][wh_y[0] >= star[0]])
+            if np.max(wh_y[0][wh_y[0] <= star[0]]) < star[0]:
+                bottom_edge = np.max(wh_y[0][wh_y[0] <= star[0]])
+        if len(wh_x[1]) > 0:
+            if np.min(wh_x[1][wh_x[1] >= star[1]]) > star[1]:
+                right_edge = np.min(wh_x[1][wh_x[1] >= star[1]])
+            if np.max(wh_x[1][wh_x[1] <= star[1]]) < star[1]:
+                left_edge = np.max(wh_x[1][wh_x[1] <= star[1]])
+
+    # Replace the border pixels with the fill_value.
+    if 'top' in which_edges:
+        im[top_edge - N_pixels:top_edge, :] = fill_value
+    if 'bottom' in which_edges:
+        im[bottom_edge:bottom_edge + N_pixels, :] = fill_value
+    if 'left' in which_edges:
+        im[:, left_edge:left_edge + N_pixels] = fill_value
+    if 'right' in which_edges:
+        im[:, right_edge - N_pixels:] = fill_value
+
+    return im
