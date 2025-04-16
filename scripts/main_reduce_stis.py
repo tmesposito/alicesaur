@@ -197,6 +197,9 @@ if __name__ == "__main__":
             # using input from the first run's output.
             updated_args = vars(args).copy()
             updated_args['inputType'] = new_inputType
+            # Remove pids so we don't download data again.
+            if 'pids' in updated_args.keys():
+                updated_args.pop('pids')
             updated_args['noFixPix'] = True
             updated_args['logger'] = pl.logger
             pl = PipelineSTIS(**updated_args)
