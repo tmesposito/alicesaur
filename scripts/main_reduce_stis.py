@@ -161,15 +161,15 @@ if __name__ == "__main__":
             updated_args['cid'] = "iter1"
         else:
             updated_args['cid'] = "iter1_" + args.cid
-        pl = PipelineSTIS(**updated_args)
+        pl_1 = PipelineSTIS(**updated_args)
         # Run the default reduction.
-        pl.run()
+        pl_1.run()
 
         # Determine the highest level intermediate product present and
         # use that as the inputType for the second iteration.
         inputType_options = ['xfc', 'xft', 'flc', 'flt']
         for it in inputType_options:
-            files_present = glob(os.path.join(pl.dataDir, f"*_{it}.fits"))
+            files_present = glob(os.path.join(pl_1.dataDir, f"*_{it}.fits"))
             if len(files_present) > 0:
                 new_inputType = it
                 break
@@ -178,17 +178,17 @@ if __name__ == "__main__":
 
         if new_inputType is None:
             try:
-                pl.logger.warning("No high-level intermediate FITS files "\
-                                  "found in {pl.dataDir}. Skipping second "\
+                pl_1.logger.warning("No high-level intermediate FITS files "\
+                                  f"found in {pl_1.dataDir}. Skipping second "\
                                   "iteration of pipeline.")
             except:
                 print("No high-level intermediate FITS files "\
-                      "found in {pl.dataDir}. Skipping second "\
+                      f"found in {pl_1.dataDir}. Skipping second "\
                       "iteration of pipeline.")
         else:
             try:
-                pl.logger.info("Running second pipeline iteration with "\
-                               f"inputType = {new_inputType}")
+                pl_1.logger.info("Running second pipeline iteration with "\
+                                 f"inputType = {new_inputType}")
             except:
                 print("Running second pipeline iteration with "\
                       f"inputType = {new_inputType}")
@@ -196,15 +196,17 @@ if __name__ == "__main__":
             # Now re-run the pipeline from the axf/axc inputs a second time,
             # using input from the first run's output.
             updated_args = vars(args).copy()
+            # Maintain the same data directory.
+            updated_args['dataDir'] = pl_1.dataDir
             updated_args['inputType'] = new_inputType
             # Remove pids so we don't download data again.
             if 'pids' in updated_args.keys():
                 updated_args.pop('pids')
             updated_args['noFixPix'] = True
-            updated_args['logger'] = pl.logger
-            pl = PipelineSTIS(**updated_args)
+            updated_args['logger'] = pl_1.logger
+            pl_2 = PipelineSTIS(**updated_args)
             # Run the second reduction.
-            pl.run()
+            pl_2.run()
 
     # Normal (single) pipeline run.
     else:
