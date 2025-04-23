@@ -270,11 +270,12 @@ class Pipeline(object):
         self.info[self.obsMode].setdefault('radProfSub',
                                            {"rMax": 200,
                                             "postCombine": True})
-        # Radon transform inner working angle [pix]
+        # Radon transform inner and outer working angles [pix]
         if self.obsMode.lower() in ['wedgeb1.8']:
             self.info[self.obsMode].setdefault('radonIWA', 70)
         else:
             self.info[self.obsMode].setdefault('radonIWA', 30)
+        self.info[self.obsMode].setdefault('radonOWA', 500)
         # starToUse is the optional forced star position
         self.starToUse = self.info[self.obsMode].setdefault('starForce_yx',
                                                             None)
@@ -918,6 +919,7 @@ class Pipeline(object):
                 stars.append(find_star_radon(imgIter,
                                     starGuess,
                                     self.spikeAngles, IWA=self.radonIWA,
+                                    radon_wdw=self.radonOWA,
                                     sp_width=20, r_mask=None)) # [pixels] y,x
 
         return np.array(stars)
@@ -1961,6 +1963,7 @@ class Pipeline(object):
         if self.spWidth is None:
             self.spWidth = self.info[self.obsMode]['spWidth'] # diffraction spike mask width [pix]
         self.radonIWA = self.info[self.obsMode]['radonIWA']
+        self.radonOWA = self.info[self.obsMode]['radonOWA']
         exclusions = self.info[self.obsMode]['exclude'] # masked region definitions
         exclusionsSci = self.exclusionsSci # science masking
         sub_r_in = self.exclusionsSci['r_in'] # PSF subtraction inner radius

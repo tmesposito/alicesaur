@@ -22,7 +22,9 @@ def find_star_radon(img, cen, spikeAngles, IWA=25., sp_width=30, r_mask=21.,
         cen: [pix]
         spikeAngles: [degrees]
         r_mask: radius of central circular mask [pix]
-        radon_wdw: size of window for Radon function [pix]
+        radon_wdw: maximum size of window for Radon function [pix]. In this
+            framework, this sets the outer radius of the considered region
+            because we force M=1.0.
     """
 
     # Clean NaN's from data- radon search doesn't like them.
@@ -55,8 +57,9 @@ def find_star_radon(img, cen, spikeAngles, IWA=25., sp_width=30, r_mask=21.,
     print("m = {:.2f}".format(m))
 
     # Do radon search.
-    x_cen, y_cen = radonCenter.searchCenter(data, cen[1], cen[0], radon_wdw, m=m, M=1.0,
-                                            size_cost=4, theta=spikeAngles, smooth=0)
+    x_cen, y_cen = radonCenter.searchCenter(data, cen[1], cen[0], radon_wdw,
+                                            m=m, M=1.0, size_cost=4,
+                                            theta=spikeAngles, smooth=0)
 
     print("y, x = {}, {}".format(y_cen, x_cen))
 
