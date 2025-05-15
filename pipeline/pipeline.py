@@ -1140,7 +1140,10 @@ class Pipeline(object):
                                              exclusionRadius=300,
                                              mask=mask)
                     bgs.append(bg)
-                    im_bgsub[jj] = im[jj] - bg
+                    if np.isnan(bg):
+                        im_bgsub[jj] = im[jj]
+                    else:
+                        im_bgsub[jj] = im[jj] - bg
             else:
                 if np.all(np.isnan(im)):
                     bgs.append(np.nan)
@@ -2360,6 +2363,10 @@ class Pipeline(object):
             self.logger.info("SUBTRACTING BACKGROUND from all images...")
             self.subtract_background()
             self.logger.info("Background means subtracted:\n{}".format(self.bgs))
+            if np.all(np.isnan(self.bgs)):
+                self.logger.warning("ALL BACKGROUND MEASUREMENTS were NaN! "\
+                                    "This is SUSPICIOUS and should be "\
+                                    "investigated.")
         else:
             self.logger.warning("Skipping background subtraction (bgCen is -1)\n")
 

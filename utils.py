@@ -452,6 +452,11 @@ def randomly_sample_bg(im, excludeYX=[], bgRadius=30, exclusionRadius=300,
     whGood = np.where(~np.isnan(imMasked))
     yRange = (int(min(whGood[0]) + bgRadius), int(max(whGood[0]) - bgRadius))
     xRange = (int(min(whGood[1]) + bgRadius), int(max(whGood[1]) - bgRadius))
+    # Handle case of narrow sub-arrays by shrinking bgRadius.
+    if (yRange[1] <= yRange[0]) or (xRange[1] <= xRange[0]):
+        bgRadius = 15
+        yRange = (int(min(whGood[0]) + bgRadius), int(max(whGood[0]) - bgRadius))
+        xRange = (int(min(whGood[1]) + bgRadius), int(max(whGood[1]) - bgRadius))
     sampleYs = np.arange(yRange[0], yRange[1], int(0.25*bgRadius))
     sampleYXs = zip(sampleYs, np.linspace(xRange[0], xRange[1], len(sampleYs),
                                           dtype=int))
