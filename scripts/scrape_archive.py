@@ -7,15 +7,18 @@ Created on Wed Oct 16 11:20:12 2024
 """
 
 import os
+import sys
 import shutil
+import argparse
 import numpy as np
 from astropy.io import fits
 from astropy.time import Time, TimeDelta
-from astropy.table import Table
+from astropy.table import Table, vstack
 from astroquery.mast import Observations
 from urllib import request as urlrequest, parse as urlparse, error as urlerror
 from tempfile import TemporaryDirectory
 from pprint import pprint
+from tqdm import tqdm
 
 from alicesaur.utils import check_mkdir
 
@@ -64,15 +67,50 @@ def get_proposal_ids(abstract='stis'): #', +ccd'): #, title=''):
 
 def find_observations(pids, instrument_name='STIS/CCD', filters='MIRVIS',
                       dataproduct_type='image', calib_level=3,
+                      dateStart=None, dateEnd=None,
                       verbose=False):
+    """
+
+    Inputs:
+
+        dateStart: str
+            Start date and time of allowed observation range, in isot format
+            like "YYYY-MM-DDThh:mm:ss". Only the "YYYY-MM-DD" is required.
+
+        dateEnd: str
+            End date and time of allowed observation range, in isot format
+            like "YYYY-MM-DDThh:mm:ss". Only the "YYYY-MM-DD" is required.
+    """
+
+    if dateStart is not None:
+        timeStart = Time(dateStart)
+        timeStart_mjd = timeStart.mjd
+
+        if dateEnd is not None:
+            timeEnd = Time(dateEnd)
+        else:
+            timeEnd = timeStart + TimeDelta(1, format='jd')
+        timeEnd_mjd = timeEnd.mjd
+
+        print("\nRestricting observation date range to between UTC "\
+              f"{dateStart} and {timeEnd.isot} (inclusive)\n")
 
     obs_list = []
-    for pid in pids:
-        obs = Observations.query_criteria(proposal_id=f'{pid}',
-                                          instrument_name=instrument_name,
-                                          filters=filters,
-                                          dataproduct_type=dataproduct_type,
-                                          calib_level=calib_level)
+    for pid in tqdm(pids, desc="Searching observations by pid"):
+        # Optionally filter by observation date range.
+        if dateStart is not None:
+            obs = Observations.query_criteria(proposal_id=f'{pid}',
+                                              instrument_name=instrument_name,
+                                              filters=filters,
+                                              dataproduct_type=dataproduct_type,
+                                              calib_level=calib_level,
+                                              t_min=[timeStart_mjd, timeEnd_mjd])
+        else:
+            obs = Observations.query_criteria(proposal_id=f'{pid}',
+                                              instrument_name=instrument_name,
+                                              filters=filters,
+                                              dataproduct_type=dataproduct_type,
+                                              calib_level=calib_level)
 
         if len(obs) <= 0:
             if verbose: print(f"No observations found for pid {pid}")
@@ -80,6 +118,18 @@ def find_observations(pids, instrument_name='STIS/CCD', filters='MIRVIS',
         else:
             # Sort observations by t_min to roughly sort by date recorded.
             obs.sort('t_min')
+            # # Filter observations by start and end date, if they are given.
+            # if dateStart is not None:
+            #     # try:
+            #     wh_date_ok = (obs['t_min'] >= timeStart_mjd) & (obs['t_min'] <= timeEnd_mjd)
+            #     if np.sum(wh_date_ok) == 0:
+            #         if verbose: print(f"pid {pid}: All {len(obs)} "\
+            #                           "observations were outside the"\
+            #                           "requested date range.")
+            #         continue
+            #     else:
+            #         obs_all = obs.copy()
+            #         obs = obs_all[wh_date_ok]
             if verbose: pprint(obs)
             obs_list.append(obs)
             
@@ -137,9 +187,9 @@ def get_oids(obs_list, target_name=None, dataDir='.'):
             'obs_id', 't_exptime'].pprint(max_lines=100, max_width=200)
 
         if len(obs) == 0:
-            self.logger.error("*** NO OBSERVATIONS FOUND in archive with" \
-                              f" program ID {pid}. Check your program ID."\
-                              " Aborting.")
+            print("*** NO OBSERVATIONS FOUND in archive with" \
+                  f" program ID {pid}. Check your program ID."\
+                  " Aborting.")
             return [], [], None
 
         # Get products.
@@ -150,19 +200,19 @@ def get_oids(obs_list, target_name=None, dataDir='.'):
         # in the obs target name.
         target_names = np.array(np.unique(obs[science_row_inds]['target_name']))
 
-        # if target_name is not None:
-        #     PSFrefs_by_name = np.array([(('PSF' in tn) and ((target_name in tn) | (target_name.replace('-', '') in tn))) for tn in obs['target_name'].data])
-        # else:
-        #     PSFrefs_by_name = np.array(len(obs)*[False])
-        # # If none found like that, expand to just 'PSF' in the target name.
-        # if np.sum(PSFrefs_by_name) == 0:
-        #     PSFrefs_by_name = np.array(['PSF' in tn for tn in obs['target_name'].data])
-        #     # Then grab anything with a specific target classification.
-        #     obs_calPSF = obs[(obs['target_classification'] == 'CALIBRATION;POINT SPREAD FUNCTION') |
-        #                      PSFrefs_by_name]
-        # else:
-        #     obs_calPSF = obs[PSFrefs_by_name]
-        # # obs_calPSF['instrument_name', 'filters', 'wavelength_region', 'target_name', 'target_classification', 'obs_id', 'obsid'].pprint(max_width=-1)
+        if target_name is not None:
+            PSFrefs_by_name = np.array([(('PSF' in tn) and ((target_name in tn) | (target_name.replace('-', '') in tn))) for tn in obs['target_name'].data])
+        else:
+            PSFrefs_by_name = np.array(len(obs)*[False])
+        # If none found like that, expand to just 'PSF' in the target name.
+        if np.sum(PSFrefs_by_name) == 0:
+            PSFrefs_by_name = np.array(['PSF' in tn for tn in obs['target_name'].data])
+            # Then grab anything with a specific target classification.
+            obs_calPSF = obs[(obs['target_classification'] == 'CALIBRATION;POINT SPREAD FUNCTION') |
+                              PSFrefs_by_name]
+        else:
+            obs_calPSF = obs[PSFrefs_by_name]
+        # obs_calPSF['instrument_name', 'filters', 'wavelength_region', 'target_name', 'target_classification', 'obs_id', 'obsid'].pprint(max_width=-1)
 
         if target_name is not None:
             obs_target = obs[obs['target_name'] == target_name]
@@ -171,12 +221,11 @@ def get_oids(obs_list, target_name=None, dataDir='.'):
 
             # Abort if no observations found with the target name.
             if len(obs_target) == 0:
-                self.logger.error("*** NO OBSERVATIONS FOUND in archive with" \
-                                  f" program ID {pid} AND target name {target_name}."\
-                                  "Check both inputs before trying again."\
-                                  " Aborting.")
+                print("*** NO OBSERVATIONS FOUND in archive with" \
+                      f" program ID {pid} AND target name {target_name}."\
+                      "Check both inputs before trying again. Aborting.")
                 unique_targets = list(np.unique(obs['target_name']))
-                self.logger.info(f"Target names found for program ID {pid}: {unique_targets}")
+                print(f"Target names found for program ID {pid}: {unique_targets}")
                 return [], [], None
 
             t_start_target = min(obs_target['t_min'])
@@ -186,9 +235,9 @@ def get_oids(obs_list, target_name=None, dataDir='.'):
             # If none, look immediately before and after the target obs.
             # Make sure to match the camera settings.
             obs_calPSF_match = obs_calPSF[(obs_calPSF['t_min'] >= t_start_target) & (obs_calPSF['t_min'] <= t_end_target)]
-            self.logger.info(f"Data Fetch: Found {len(obs_calPSF_match)} clearly labeled PSF reference star image(s) amid science images")
+            print(f"Data Fetch: Found {len(obs_calPSF_match)} clearly labeled PSF reference star image(s) amid science images")
             if len(obs_calPSF_match) > 0:
-                self.logger.info(f"Data Fetch: PSF reference stars found: {list(np.unique(obs_calPSF_match['target_name']))}")
+                print(f"Data Fetch: PSF reference stars found: {list(np.unique(obs_calPSF_match['target_name']))}")
             # Get obs_id's for the PSF reference images.
             oids_for_refs = list(np.unique(obs_calPSF_match['obs_id']))
             obs_calPSF = vstack([obs_calPSF, obs_calPSF_match])
@@ -268,7 +317,7 @@ def get_oids(obs_list, target_name=None, dataDir='.'):
     print(f"\nSCIENCE proposal ids ({len(pids_science)}):\n"\
           f"{pids_science}\n")
 
-    table = Table(data=None, names=["dataset_id"], dtype=[str])
+    table = Table(data=None, names=["pid", "dataset_id"], dtype=[str, str])
 
     # Identify all the data by downloading it -- sooo slow and messy.
     for ii, oid in enumerate(oids_science):
@@ -277,7 +326,7 @@ def get_oids(obs_list, target_name=None, dataDir='.'):
                                            product_types='FLT', download_mode='general')
 
             for uid_obs in unique_ids_obs:
-                table.add_row(vals=[uid_obs])
+                table.add_row(vals=[pids_science[ii], uid_obs])
             table.write(os.path.join(dataDir, 'dataset_ids.csv'), delimiter=',',
                         format='ascii.fast_no_header',
                         overwrite=True)
@@ -404,3 +453,44 @@ def download_data(ids, obs, destination, product_types=None,
             unique_id_list.append(uid)
 
     return unique_id_list
+
+
+
+if __name__ == "__main__":
+
+    desc = 'Scrape STIS observation information from the MAST archive.'
+    parser = argparse.ArgumentParser(description=desc)
+
+    desc = 'Start date of the time range to scrape. Must be in isot format '
+    desc += 'like YYYY-MM-DDThh:mm:ss. Only the YYYY-MM-DD day is required.'
+    desc += 'If None (default), no time constraint is applied.'
+    parser.add_argument('--date-start', default=None, type=str,
+                        nargs='?', help=desc)
+
+    desc = 'End date of the time range to scrape. Must be in isot format '
+    desc += 'like YYYY-MM-DDThh:mm:ss. Only the YYYY-MM-DD day is required.'
+    desc += 'If None (default), no time constraint is applied.'
+    parser.add_argument('--date-end', default=None, type=str,
+                        nargs='?', help=desc)
+
+    desc = 'Path to output directory for files created.'
+    parser.add_argument('--output-dir', default='.', type=str,
+                        nargs='?', help=desc)
+
+    args = parser.parse_args()
+
+    if (args.date_start is not None) & (args.date_end is None):
+        print("\n*** HELP!!! If --date-start is given, you must also give "\
+              "-date-end. Exiting.\n")
+        sys.exit(0)
+
+    # Get all proposal ids that contain "stis" in the abstract.
+    pids = get_proposal_ids(abstract='stis')
+
+    # List all observations for those pids.
+    obs_list = find_observations(pids, dateStart=args.date_start,
+                                 dateEnd=args.date_end)
+
+    # Get Observation IDs for all observations.
+    dataset_id_table = get_oids(obs_list,
+                                dataDir=os.path.abspath(args.output_dir))
