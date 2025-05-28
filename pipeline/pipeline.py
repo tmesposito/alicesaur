@@ -78,6 +78,8 @@ class Pipeline(object):
     deltaPAMin = None
     # Custom ID for this pipeline.
     cid = ''
+    # MAST login token, required only to download proprietary data.
+    mastToken = None
 
     def __init__(self, **kwargs):
 
@@ -2016,7 +2018,8 @@ class Pipeline(object):
                 self.logger.info("Start data fetching and CTI correction step")
                 # Create CTI object instance; set up directories and environment.
                 stisCTI = CTI(obsMode=self.obsMode,
-                              loggerName=self.logger.name)
+                              loggerName=self.logger.name,
+                              loginToken=self.mastToken)
                 stisCTI.setup_directories(base_dir=self.dataDir)
                 stisCTI.setup_env()
 

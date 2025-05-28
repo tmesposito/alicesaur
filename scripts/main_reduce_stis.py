@@ -141,6 +141,11 @@ if __name__ == "__main__":
         'iterations to refine the final result.'
     parser.add_argument('--iterate', action="store_true", help=desc)
 
+    desc = 'MAST login token; only required for downloading proprietary data. '
+    desc += 'You can create a new token at https://auth.mast.stsci.edu/tokens'
+    parser.add_argument('--mastToken', default=None, type=str,
+                        nargs='?', help=desc)
+
     args = parser.parse_args()
 
 

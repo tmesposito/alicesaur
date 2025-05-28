@@ -370,8 +370,11 @@ class CTI():
     def download_ref_files(self, image_list):
         self.logger.info(f'CTI correction: Downloading reference files for following {len(image_list)} images:\n{image_list}\n')
         images = ' '.join(image_list)
-        subprocess.check_output('crds bestrefs --files {} --sync-references=1 --update-bestrefs'.format(images),
-                                shell=True, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.check_output(f'crds bestrefs --files {images} --sync-references=1 --update-bestrefs',
+                                    shell=True, stderr=subprocess.DEVNULL)
+        except:
+            self.logger.exception('CTI correction: CRDS error. Reference file download FAILED!')
 
 
     def download_darks(self):
