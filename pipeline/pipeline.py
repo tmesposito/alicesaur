@@ -732,11 +732,12 @@ class Pipeline(object):
         return data_fixed
 
     
-    def summarize_obs(self, suffix='sx2', dsName=None):
+    def summarize_obs(self, suffix='flt', dsName=None):
         """
         Summarize FITS header info in a table.
 
-        suffix: str suffix of FITS files to summarize.
+        suffix: str suffix of FITS files to summarize. Can ONLY be 'flt' or
+            'flc'; if other, it will be forced to one of those two.
         dsName: str optional name of dataset for log filename; defaults to the
             lowest level directory of dataDir.
         """
@@ -744,37 +745,85 @@ class Pipeline(object):
         if not os.path.exists(self.dataDir):
             self.logger.error("*** Directory {} does not exist ** !!\n".format(self.dataDir))
             raise OSError
-    
+
+        if suffix not in ['flt', 'flc']:
+            flt_fl = glob(self.dataDir + '*_flt.fits*')
+            flc_fl = glob(self.dataDir + '*_flc.fits*')
+            if len(flt_fl) > 0:
+                self.logger.warning("Cannot build observation log from "\
+                                    f"{suffix} files; building it from "\
+                                    "flt files instead.")
+                hdr_suffix = 'flt'
+            elif len(flc_fl) > 0:
+                self.logger.warning("Cannot build observation log from "\
+                                    f"{suffix} files; building it from "\
+                                    "flc files instead.")
+                hdr_suffix = 'flc'
+            else:
+                self.logger.error("Cannot build observation log from "\
+                                  f"{suffix} files and no flt or flc "\
+                                  "files were found in dataDir. Will not "\
+                                  "write an observation log.")
+                return
+        else:
+            hdr_suffix = suffix
+
         fl = np.sort(glob(self.dataDir + '*_{}.fits*'.format(suffix)))
-    
+
         rows = []
-        col_names = ['I', 'FILENAME', 'TARGNAME', 'ORIENTAT', 'TDATEOBS', 'TTIMEOBS', 'PROPAPER', 'NCOMBINE',
-                     'EXPTIME', 'NDATAARR']
-        col_dtypes = ['int32', 'U80', 'U40', 'U40', 'U40', 'U40', 'U40', 'int32',
-                      'float', 'int32']
-    
+        col_names = ['IMAGE', 'FILENAME', 'TARGNAME', 'FILETYPE',
+                     'ORIENTAT', 'TDATEOBS',
+                     'TTIMEOBS', 'PROPAPER',
+                     'TOTAL_INTEGRATION_SECONDS', 'N_CRSPLITS',
+                     'EXPTIME_PER_CRSPLIT_SECONDS', 'N_EXTENSIONS',
+                     'PROPOSAL_ID', 'DETECTOR',
+                     'OPT_ELEM', 'APERTURE',
+                     'FILTER', 'CCDGAIN',
+                     'PHOTFLAM'
+                     ]
+        col_dtypes = ['int32', 'U80', 'U40', 'U40',
+                      'float', 'U40',
+                      'U40', 'U40',
+                      'float', 'int32',
+                      'float', 'int32',
+                      'U40', 'U40',
+                      'U40', 'U40',
+                      'U40', 'U40',
+                      'float']
+
         for ii, ff in enumerate(fl):
-            hdr0 = fits.getheader(ff, ext=0)
-            hdr1 = fits.getheader(ff, ext=1)
-            # Get number of data arrays in _flt.fits file.
+            # hdr0 = fits.getheader(ff, ext=0)
+            # hdr1 = fits.getheader(ff, ext=1)
+            # Get number of data arrays in flt.fits or flc.fits file.
+            ff_flt = ff.split(suffix)[0] + f'{hdr_suffix}.fits'
+            hdr0 = fits.getheader(ff_flt, ext=0)
+            hdr1 = fits.getheader(ff_flt, ext=1)
             try:
-                ff_flt = ff.split(suffix)[0] + 'flt.fits'
-                hdr_flt = fits.getheader(ff_flt, ext=0)
-                nDataDim = hdr_flt['NEXTEND'] + 1
+                nDataDim = hdr0.get('NEXTEND') + 1
             except:
                 nDataDim = -1
-            rows.append((ii+1, os.path.split(ff)[-1], hdr0.get('TARGNAME'), hdr1.get('ORIENTAT'), hdr0.get('TDATEOBS'),
+            try:
+                total_integration_seconds = hdr0.get('CRSPLIT')*hdr1.get('EXPTIME')
+            except:
+                total_integration_seconds = -1
+            rows.append((ii+1, os.path.split(ff)[-1], hdr0.get('TARGNAME'), hdr0.get('FILETYPE'),
+                         hdr1.get('ORIENTAT'), hdr0.get('TDATEOBS'),
                          hdr0.get('TTIMEOBS'), hdr0.get('PROPAPER'),
-                         hdr1.get('NCOMBINE'), hdr1.get('EXPTIME'), nDataDim))
-    
+                         total_integration_seconds,
+                         hdr0.get('CRSPLIT'), hdr1.get('EXPTIME'), nDataDim,
+                         hdr0.get('PROPOSID'),hdr0.get('DETECTOR'),
+                         hdr0.get('OPT_ELEM'), hdr0.get('APERTURE'),
+                         hdr0.get('FILTER'), hdr0.get('CCDGAIN'),
+                         hdr0.get('PHOTFLAM')))
+
         sum_table = table.Table(rows=rows, names=col_names, dtype=col_dtypes)
-    
+
         if dsName is None:
             dsName = os.path.split(self.dataDir[:-1])[-1]
         table_name = 'obs_log_{}.csv'.format(dsName)
         sum_table.write(self.dataDir + table_name, format='csv', overwrite=True)
         self.logger.info(f"Wrote observation summary table to {self.dataDir + table_name}")
-    
+
         return
 
     # def summarize_obs(self, suffix='flt', dsName=None):
@@ -1952,10 +2001,8 @@ class Pipeline(object):
         # Angles at which diffraction spikes occur in STIS data [deg].
         self.spikeAngles = np.array([44.9, 134.7]) # [deg] clockwise from 0 at +X
 
-
-        # # Summarize the dataset info from FITS headers.
-        # if len(glob(dataDir + 'obs_log*.csv')) < 1:
-        #   summarize_obs(dataDir, suffix=self.inputType, dsName=None)
+        # Summarize the dataset info from FITS headers.
+        self.summarize_obs(suffix=self.inputType, dsName=None)
 
         # Fetch dataset info and reduction parameters from info.json.
         info, infoPath = self.info, self.infoPath
@@ -2541,7 +2588,7 @@ class Pipeline(object):
                 plt.figure(4)
                 plt.clf()
                 plt.imshow(self.alignMasks[ind])
-                plt.title("Occulter ('align') mask")
+                plt.title(f"Occulter ('align') mask (ind={ind})")
                 plt.draw()
                 plt.show()
 
