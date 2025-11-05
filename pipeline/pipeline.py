@@ -2001,9 +2001,6 @@ class Pipeline(object):
         # Angles at which diffraction spikes occur in STIS data [deg].
         self.spikeAngles = np.array([44.9, 134.7]) # [deg] clockwise from 0 at +X
 
-        # Summarize the dataset info from FITS headers.
-        self.summarize_obs(suffix=self.inputType, dsName=None)
-
         # Fetch dataset info and reduction parameters from info.json.
         info, infoPath = self.info, self.infoPath
 
@@ -2101,6 +2098,12 @@ class Pipeline(object):
 
 
     # ========== LOAD IMAGES ========== #
+
+        # Summarize the dataset info from FITS headers.
+        try:
+            self.summarize_obs(suffix=self.inputType, dsName=None)
+        except:
+            self.logger.exception("FAILED to write observation log:")
 
         # Returns list where [0] = data from each fits, [1] = headers from each fits.
         # Each item in [0] and [1] is also a list of arrays.
