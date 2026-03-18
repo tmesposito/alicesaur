@@ -33,6 +33,8 @@ def mask_exclusions(im=None, mask=None, exclusions={}, cen=None,
 
     for excl in exclusions.setdefault('pa_deg', []):
         newMask = mask_pa(newMask.copy(), excl, cen, cenOffset, paOffset)
+    for excl in exclusions.setdefault('cdisk_yx_rin_rout', []):
+        newMask = mask_cdisk(newMask.copy(), excl, cen, cenOffset, paOffset)
     for excl in exclusions.setdefault('rect_cenYX_widthYX_angleDeg', []):
         newMask = mask_rect(newMask.copy(), excl, cen, cenOffset, paOffset)
     for excl in exclusions.setdefault('point_yxr', []):
@@ -99,6 +101,50 @@ def mask_rect(mask, rectExclude, cen, cenOffset=None, paOffset=0.):
                                preserve_nan=True, cval=1)
         addMask *= mask
         addMask = np.nan_to_num(addMask, nan=1, copy=True)
+    except Exception as ee:
+        print(ee)
+        addMask = mask
+
+    return addMask
+
+
+def mask_cdisk(mask, cdiskExclude, cen, cenOffset=None, paOffset=0.):
+    """
+    Mask out a circular disk annulus (ring) defined by:
+    cdiskExclude = [center_YX, inner_radius, outer_radius]
+
+    Parameters:
+        - mask: 2D array to be masked
+        - cdiskExclude: list/tuple: [center_YX, inner_radius, outer_radius]
+        - cen: center of rotation/reference [Y,X]
+        - cenOffset: optional offset [Y,X]
+        - paOffset: rotation angle in degrees applied to center
+    """
+
+    addMask = np.ones(mask.shape)
+    try:
+        cenYX = np.array(cdiskExclude[0])
+        if cenOffset is not None:
+            cenYX += np.round(cenOffset).astype(int)
+        inner_r = cdiskExclude[1]
+        outer_r = cdiskExclude[2]
+
+        # Rotate center point by paOffset
+        cenYXRel = cenYX - cen
+        cenYXRot = cen + np.array([
+            cenYXRel[1]*np.cos(np.radians(paOffset)) - cenYXRel[0]*np.sin(np.radians(paOffset)),
+            cenYXRel[1]*np.sin(np.radians(paOffset)) + cenYXRel[0]*np.cos(np.radians(paOffset))
+        ])[::-1]
+
+        radii = utils.make_radii(mask, cenYXRot)
+
+        # Mask pixels with radius between inner and outer radius
+        mask_region = (radii >= inner_r) & (radii <= outer_r)
+        addMask[mask_region] = np.nan
+
+        addMask *= mask
+        addMask = np.nan_to_num(addMask, nan=1, copy=True)
+
     except Exception as ee:
         print(ee)
         addMask = mask

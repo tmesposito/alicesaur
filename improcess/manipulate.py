@@ -36,8 +36,8 @@ def stack_images(imPaths, errorPaths=[], mode='weightedMean', negToNan=False,
 
     for ii, ff in enumerate(imPaths):
         with fits.open(ff) as hdul:
-            if hdul[0].data.ndim > 2:
-                data.append(hdul[0].data[dataInds[ii]])
+            if len(hdul) > 2:
+                data.append(hdul[dataInds[ii]].data)
             else:
                 data.append(hdul[0].data)
             hdrs.append(hdul[0].header)

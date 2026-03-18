@@ -22,11 +22,40 @@ from alicesaur.plot.disk_plot import measure_radial_profile
 
 def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
                              rMax=180, interpInf=True, expandHW_r=False,
-                             expandHW=None, mode='mean', smooth=True):
+                             expandHW=None, mode='mean', smooth=True,
+                             cleanOutliers=False, madLimit=5):
     """
-    paList: list, position angles east of +y axis in [degrees].
-    paHW: half-width of PA wedge to include on either side of pa [deg].
-    rMax: max radius of profile to measure [pixels].
+
+    Inputs
+
+        paList: list of float
+            Position angles east of +y axis in [degrees] at which to center
+            measurements of the radial profile. Default is [0.,90.,180.,270.].
+
+        paHW: float
+            Half-width of PA wedge in [deg] to include on either side of paList
+            value. Default is None, which returns a profile of all zeros.
+
+        rMax: int
+            Maximum radius of profile to measure [pixels]. Default is 180.
+
+        mode: str
+            'peak' (max), 'mean', or 'median' value to return as the profile
+            measurement. Default is 'mean'.
+
+        smooth: bool
+            True to smooth the profile after it is measured. Default is True.
+
+        cleanOutliers: bool
+            True to remove outlier values from the profile based on a
+            cut of 5 median absolute deviations from the profile median.
+            Default is False. NOTE: only the raw profile (without cleaning) is
+            considered when locating the PA of the profile peak.
+
+        madLimit: float
+            Number of median absolute deviations above the median at which to
+            consider a value an outlier and reject it. Only takes effect if
+            cleanOutliers is True. Default is 5.
     
     Output:
         Smoothed 2D map of the median radial profile measured at paList.
@@ -44,7 +73,9 @@ def measure_mean_radial_prof(img, cen, paList=[0., 90., 180., 270.], paHW=None,
         rads, prof, profOpp, paPeak, paOppPeak = measure_radial_profile(img,
                                     star=cen, pa=pa, rMax=rMax, mode=mode,
                                     paHW=paHW, height=None, plot=False,
-                                    expandHW_r=expandHW_r, expandHW=expandHW)
+                                    expandHW_r=expandHW_r, expandHW=expandHW,
+                                    cleanOutliers=cleanOutliers,
+                                    madLimit=madLimit)
         # Clean the profiles of high outliers.
         prof = np.array(prof)
         # profOpp = np.array(profOpp)
@@ -499,7 +530,9 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                                                        paHW=radProfPaHW, rMax=radProfMax,
                                                        interpInf=False,
                                                        smooth=True,
-                                                       mode='median')
+                                                       mode='median',
+                                                       cleanOutliers=True,
+                                                       madLimit=5)
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 subImgs_subRadProf.append(subImg - meanRadProf)
 
@@ -624,7 +657,9 @@ def rdi_subtract_psf(sciImgs, refImgs, sciMasks, refMasks, sciStars,
                                         paHW=radProfPaHW, rMax=radProfMax,
                                         interpInf=False,
                                         smooth=True,
-                                        mode='median')
+                                        mode='median',
+                                        cleanOutliers=True,
+                                        madLimit=5)
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 subImgs_subRadProf.append(subImg - meanRadProf)
                 print("\nSubtracted mean radial profile after main "\

@@ -70,7 +70,7 @@ class Pipeline(object):
     # Observation mode; typically the occulter position.
     obsMode = ''
     # Image plate scale.
-    pscale = 0.0507 # [arcsec/pixel]
+    pscale = 0.05075 # [arcsec/pixel] Nguyen et al. 2021
     # Image dimensions.
     imgShape = np.array([1024, 1024]) # [Y,X pixels]
     # Minimum PA rotation to allow reference images in ADI PSF subtractions.
@@ -1964,7 +1964,8 @@ class Pipeline(object):
                                                         paHW=180, rMax=rMax,
                                                         interpInf=False,
                                                         smooth=False,
-                                                        mode='mean')
+                                                        mode='mean',
+                                                        cleanOutliers=True)
         meanRadProf1d = meanRadProf2d[int(np.round(self.alignStar[0])),
                                       int(np.round(self.alignStar[1])) + 3:int(np.round(self.alignStar[1])) + rMax]
 
@@ -2999,7 +3000,9 @@ class Pipeline(object):
                                                        rMax=info[obsMode]['radProfSub']['rMax'],
                                                        interpInf=False,
                                                        smooth=True,
-                                                       mode='median')
+                                                       mode='median',
+                                                       cleanOutliers=True,
+                                                       madLimit=5)
                 meanRadProf = np.nan_to_num(meanRadProf, 0)
                 # Keep the "pure" final image pure (no radial profile
                 # subtraction at all), still defined as finalImg.

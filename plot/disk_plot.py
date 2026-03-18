@@ -31,7 +31,7 @@ matplotlib.rcParams['image.origin'] = 'lower'
 
 
 #---- DEFINE CONSTANTS ----#
-pscale_stis = 0.0507 # [arcsec/pixel]
+pscale_stis = 0.05075 # [arcsec/pixel] Nguyen et al. 2021
 
 
 def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
@@ -155,8 +155,8 @@ def plot_stis_gpi_rows(targList=[], zoomGpi=True, gpiOverlay=False, sbcal=False,
                               np.array(axAll[0][1].get_position())[1][1],
                               np.array(axAll[0][2].get_position())[1][0] - np.array(axAll[0][0].get_position())[0][0],
                               0.015])
-        cax.tick_params(direction='in', pad=1)
-        
+        cax.tick_params(direction='in', pad=1, which='both')
+
         caxGPI = easy_colorbar(axAll[0][-1].images[0], axAll[0][-1], fig,
                                Vmin=axAll[0][-1].images[0].get_clim()[0],
                                Vmax=vmax_gpi,
@@ -223,14 +223,14 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
             stis_paths = [det_fns[targName]['wedge'],
                           det_fns[targName]['bar']]
             if stis_cube_inds is None:
-                stis_cube_inds = [det_fns[targName].get('wedgeInd', 0),
-                                  det_fns[targName].get('barInd', 0)]
+                stis_cube_inds = [det_fns[targName].get('wedgeInd', 1),
+                                  det_fns[targName].get('barInd', 1)]
         if gpi_path is None:
             gpi_path = det_fns[targName]['rstokes']
 
     # Set the STIS cube indices based on the input arg, if given.
     if stis_cube_inds is None:
-        stis_cube_inds = len(stis_paths)*[0]
+        stis_cube_inds = len(stis_paths)*[1]
     elif type(stis_cube_inds) not in [list, np.ndarray, tuple]:
         stis_cube_inds = len(stis_paths)*[stis_cube_inds]
     elif len(stis_cube_inds) < len(stis_paths):
@@ -240,13 +240,15 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
     stis = []
     for ii, pth in enumerate(stis_paths):
         try:
-            stis_hdus.append(fits.open(os.path.expanduser(pth)))
+            hdul = fits.open(os.path.expanduser(pth), mode='readonly')
+            stis_hdus.append(hdul)
+            if len(stis_hdus[ii]) > 2:
+                img = stis_hdus[ii][stis_cube_inds[ii]].data.copy()
+                print(f"Using index {stis_cube_inds[ii]} for image at "\
+                      f"{pth}")
+            else:
+                img = stis_hdus[ii][1].data.copy()
             if sbcal:
-                img = stis_hdus[ii][0].data.copy()
-                if img.ndim == 3:
-                    img = img[stis_cube_inds[ii]]
-                    print(f"Using index {stis_cube_inds[ii]} for image at "\
-                          f"{pth}")
                 hdr = stis_hdus[ii][0].header
                 # Assuming starting unit is COUNTS S^-1, can get away with
                 # forcing exptime = 1 because it is only used to convert to
@@ -256,7 +258,7 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
                                 gain=4.016, exptime=1, nCombine=hdr.get('NCOMBINE'))
                 stis.append(imgCal[0])
             else:
-                stis.append(stis_hdus[ii][0].data)
+                stis.append(img)
         except Exception as ee:
             print(ee)
             stis_hdus.append(None)
@@ -680,7 +682,8 @@ def plot_stis_gpi_side(targName=None, stis_paths=None, gpi_path=None,
                                 step=1, widfrac=0.05, label='Colorbar label', labelPad=5,
                                 fontSize=fs, cticks=None, orientation='horizontal', spine_color=None,
                                 side='top', output=True)
-        
+            cax.tick_params(direction='in', which='both')
+
     # ax1.yaxis.set_visible(False)
     ax0.set_ylabel('[arcsec]', fontsize=fs)
     plt.draw()
@@ -2184,19 +2187,63 @@ def measure_radial_profile_fits(fp, pa=None, height=None, rMax=250.,
 
 def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
                            paHW=None, height=None, plot=True, expandHW_r=False,
-                           expandHW=None):
+                           expandHW=None, cleanOutliers=False,
+                           madLimit=5):
     """
-    data: array of image to be measured.
-    star: y,x array of pixel coordinates for center of radial profile.
-    pa: position angle counterclockwise from +y axis in [deg].
-    mode: 'peak', 'mean', or 'median' for the azimuthal flux measurement.
-    rMax: float, maximum radius in [pixels] to which profile gets measured.
-    paHW: half-width of PA wedge to include on either side of pa [deg].
-    height: float, diameter in [pixels] of the azimuthal window over which to 
-        measure the profile value at each radius, used to define paHW if no
-        paHW value is given as input.
+    Measure an intensity radial profile of an image within some defined
+    azimuthal range starting from a given central point.
+
+    Inputs
+
+        data: 2d array of float
+            Array of image to be measured.
+
+        star: 1x2 array of int
+            y,x array of pixel coordinates for center of radial profile.
+
+        pa: float
+            Position angle counterclockwise from +y axis in [deg].
+
+        mode: str
+            'peak' (max), 'mean', or 'median' value to return as the profile
+            measurement. Default is 'peak'.
+
+        rMax: float
+            Maximum radius in [pixels] to which profile gets measured.
+
+        paHW: float
+            Half-width of PA wedge to include on either side of pa [deg].
+
+        height: float
+            Diameter in [pixels] of the azimuthal window over which to
+            measure the profile value at each radius, used to define paHW if no
+            paHW value is given as input.
+
+        cleanOutliers: bool
+            True to remove outlier values from the profile based on a
+            cut of 5 median absolute deviations from the profile median.
+            Default is False. NOTE: only the raw profile (without cleaning) is
+            considered when locating the PA of the profile peak.
+
+        madLimit: float
+            Number of median absolute deviations above the median at which to
+            consider a value an outlier and reject it. Only takes effect if
+            cleanOutliers is True. Default is 5.
+
+    Outputs
+
+        Arrays of the radii used, profile measurements, "opposite" side
+        profiles measured, PAs of the profile peaks, and PAs of the
+        "opposite" profile peaks
+
     """
     
+    if (mode == 'peak') and cleanOutliers:
+        print("\nWARNING!!! Radial profile measurement is set to 'peak' mode "\
+              "and cleanOutliers = True, which is not recommended because "\
+              "the outlier cleaning may clip the profile peak value. You "\
+              "have been warned. Continuing.\n")
+
     radii = make_radii(data, star)
     phi = make_phi(data, star)
     
@@ -2251,14 +2298,24 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
         phiCond = phiCondMin + phiCondMax
 
         try:
-            # mad = median_abs_deviation(data[radCond & phiCond])
-            # print(f"MAD is {mad:.4f}")
+            prof_vals_raw = data[radCond & phiCond]
+            # Require there to be at least 6 good values to perform outlier
+            # cleaning.
+            if cleanOutliers and (np.sum(~np.isnan(prof_vals_raw)) > 5):
+                median = np.nanmedian(prof_vals_raw)
+                mad = median_abs_deviation(prof_vals_raw, nan_policy='omit')
+                madCond = (np.abs(prof_vals_raw - median)/mad) < madLimit
+                prof_vals = prof_vals_raw[madCond]
+                print(f"r={rad}: Rejected {len(prof_vals_raw) - len(prof_vals)} out of {len(prof_vals_raw)} profile values")
+            else:
+                prof_vals = prof_vals_raw
+
             if mode == 'peak':
-                prof.append(np.nanmax(data[radCond & phiCond]))
+                prof.append(np.nanmax(prof_vals))
             elif mode == 'mean':
-                prof.append(np.nanmean(data[radCond & phiCond]))
+                prof.append(np.nanmean(prof_vals))
             elif mode == 'median':
-                prof.append(np.nanmedian(data[radCond & phiCond]))
+                prof.append(np.nanmedian(prof_vals))
         except:
             prof.append(np.nan)
 
@@ -2273,14 +2330,26 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
         try:
             phiCondOpp = (phi < paPhiOpp + paHW) & (phi > paPhiOpp - paHW)
             try:
+                profOpp_vals_raw = data[radCond & phiCondOpp]
+                # Require there to be at least 6 good values to perform outlier
+                # cleaning.
+                if cleanOutliers and (np.sum(~np.isnan(profOpp_vals_raw)) > 5):
+                    median = np.nanmedian(profOpp_vals_raw)
+                    mad = median_abs_deviation(profOpp_vals_raw, nan_policy='omit')
+                    madCond = (np.abs(profOpp_vals_raw - median)/mad) < madLimit
+                    profOpp_vals = profOpp_vals_raw[madCond]
+                else:
+                    profOpp_vals = profOpp_vals_raw
+
                 if mode == 'peak':
-                    profOpp.append(np.nanmax(data[radCond & phiCondOpp]))
+                    profOpp.append(np.nanmax(profOpp_vals))
                 elif mode == 'mean':
-                    profOpp.append(np.nanmean(data[radCond & phiCondOpp]))
+                    profOpp.append(np.nanmean(profOpp_vals))
                 elif mode == 'median':
-                    profOpp.append(np.nanmedian(data[radCond & phiCondOpp]))
+                    profOpp.append(np.nanmedian(profOpp_vals))
             except:
                 profOpp.append(np.nan)
+
             if np.isnan(profOpp[-1]):
                 paOppPeak.append(np.nan)
             else:
