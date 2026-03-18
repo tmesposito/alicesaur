@@ -34,9 +34,6 @@ def find_star_radon(img, cen, spikeAngles, IWA=25., sp_width=30, r_mask=21.,
     data = utils.unsharp(None, data.copy(), None, B=40., ident=None, output=True,
                    silent=True, save=False, parOK=True, gauss=False)
 
-    # # Smooth image (odd box size probably best)- usually a good idea.
-    # data = gaussian_filter(data, 1)
-
     # DEPRECATED kinda by IWA. Should never set r_mask > IWA.
     # Mask center if wanted.
     if r_mask is not None:
@@ -60,10 +57,9 @@ def find_star_radon(img, cen, spikeAngles, IWA=25., sp_width=30, r_mask=21.,
     x_cen, y_cen = radonCenter.searchCenter(data, cen[1], cen[0], radon_wdw,
                                             m=m, M=1.0, size_cost=4,
                                             theta=spikeAngles, smooth=0)
+    refYX = np.array([y_cen, x_cen])
 
-    print("y, x = {}, {}".format(y_cen, x_cen))
-
-    return np.array([y_cen, x_cen])
+    return refYX
 
 
 def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3,
@@ -86,13 +82,20 @@ def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3,
     if finalYX is None:
         finalYX = np.array(img.shape)//2
 
+    # --- CROSS-PLATFORM FIX ---
+    # Validate refYX before casting to int. If NaN or Inf from a failed 
+    # star detection, perform a zero-shift to preserve the image data safely.
+    if np.any(np.isnan(refYX)) or np.any(np.isinf(refYX)):
+        print(f"WARNING: Invalid refYX {refYX} detected. Defaulting to zero-shift.")
+        refYX = np.copy(finalYX)
+
     refYX_round = np.floor(refYX).astype(int)
     finalYX_round = np.floor(finalYX).astype(int)
 
     if not np.all(finalYX_round == finalYX):
-        raise ValueError("HELP!!! Image alignment with align.shift_pix_to_pix"\
-                         " ONLY works with final center coordinates (finalYX)"\
-                         " that are whole integer pixels, e.g., "\
+        raise ValueError("HELP!!! Image alignment with align.shift_pix_to_pix "\
+                         "ONLY works with final center coordinates (finalYX) "\
+                         "that are whole integer pixels, e.g., "\
                          "[1024.0, 1024.0]. Sorry!")
 
     if outputSize is not None:
@@ -114,12 +117,14 @@ def shift_pix_to_pix(img, refYX, finalYX=None, outputSize=None, order=3,
             imgShift_sp = imgShift_sp[:trim_0, :]
         else:
             upper_index_0 = finalYX_round[0]-refYX_round[0]+imgShift_sp.shape[0]
+
         if finalYX_round[1]-refYX_round[1]+imgShift_sp.shape[1] > imgShift.shape[1]:
             upper_index_1 = imgShift.shape[1]
             trim_1 = upper_index_1 - (finalYX_round[1]-refYX_round[1]+imgShift_sp.shape[1])
             imgShift_sp = imgShift_sp[:, :trim_1]
         else:
             upper_index_1 = finalYX_round[1]-refYX_round[1]+imgShift_sp.shape[1]
+
         imgShift[finalYX_round[0]-refYX_round[0]:upper_index_0,
                  finalYX_round[1]-refYX_round[1]:upper_index_1] = imgShift_sp
     else:
