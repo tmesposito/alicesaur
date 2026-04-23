@@ -3,6 +3,8 @@ import numpy as np
 from astropy import time
 from astropy.coordinates import get_body_barycentric
 from astropy.io import fits
+from astroquery.simbad import Simbad
+
 
 def gaia_correlated_variates(astrometry, error, correlation, n=int(1e6)):
 
@@ -212,7 +214,6 @@ def confidence_levels(data):
 
 def get_gaia_id(simbadName):
 
-    from astroquery.simbad import Simbad
     result_table = Simbad.query_objectids(simbadName)
 
     # If the first attempt at querying for the target name in SIMBAD fails,
@@ -225,26 +226,25 @@ def get_gaia_id(simbadName):
             result_table = Simbad.query_objectids(simbadName[2:].replace('-', ' '))
 
     if result_table is None:
-        print('No Gaia ID found from SIMBAD query for target '\
+        print('No results found from SIMBAD query for target '\
               f'name {simbadName}. Gaia astrometry cannot be '\
               'performed.')
         return None
 
-    if 'ID' in result_table.keys():
-        gaiaIDs = [id for id in result_table['ID'] if 'Gaia' in id]
+    if 'id' in result_table.keys():
+        gaiaIDs = [gid for gid in result_table['id'] if 'Gaia' in gid]
+    elif 'ID' in result_table.keys():
+        gaiaIDs = [gid for gid in result_table['ID'] if 'Gaia' in gid]
+    else:
+        gaiaIDs = []
 
-        # Prefer Gaia DR3 ID if exists.
-        if len(gaiaIDs) > 0:
-            for dr in ['DR3', 'DR2']:
-                wh = [dr in id for id in gaiaIDs]
-                if np.any(wh):
-                    gaiaID = np.array(gaiaIDs)[wh][0]
-                    return gaiaID
-        else:
-            print('No Gaia ID found from SIMBAD query for target '\
-                  f'name {simbadName}. Gaia astrometry cannot be '\
-                  'performed.')
-            return None
+    # Prefer Gaia DR3 ID if exists.
+    if len(gaiaIDs) > 0:
+        for dr in ['DR3', 'DR2']:
+            wh = [dr in gid for gid in gaiaIDs]
+            if np.any(wh):
+                gaiaID = np.array(gaiaIDs)[wh][0]
+                return gaiaID
     else:
         print('No Gaia ID found from SIMBAD query for target '\
               f'name {simbadName}. Gaia astrometry cannot be '\

@@ -2904,6 +2904,7 @@ class Pipeline(object):
                 gaiaID = get_gaia_id(self.targSimbad)
                 if gaiaID is not None:
                     gaiaIDNumber = int(gaiaID.split(' ')[-1])
+                    self.logger.info(f"Gaia ID found: {gaiaIDNumber}")
                     target_rv = [0., 0.]
 
 # FIX ME!!! Still using the axc headers for Gaia astrometry below.
