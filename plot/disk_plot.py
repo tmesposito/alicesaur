@@ -2306,7 +2306,7 @@ def measure_radial_profile(data, star, pa, mode='peak', rMax=250,
                 mad = median_abs_deviation(prof_vals_raw, nan_policy='omit')
                 madCond = (np.abs(prof_vals_raw - median)/mad) < madLimit
                 prof_vals = prof_vals_raw[madCond]
-                print(f"r={rad}: Rejected {len(prof_vals_raw) - len(prof_vals)} out of {len(prof_vals_raw)} profile values")
+                #print(f"r={rad}: Rejected {len(prof_vals_raw) - len(prof_vals)} out of {len(prof_vals_raw)} profile values")
             else:
                 prof_vals = prof_vals_raw
 
