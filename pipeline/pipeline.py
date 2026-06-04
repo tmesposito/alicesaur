@@ -1017,8 +1017,13 @@ class Pipeline(object):
             # interpolated images.
             if self.allHdrs[0][0].get('SUBARRAY', False):
                 # Correct for subarray center shift compared to full array.
-                dX_subcen = self.allHdrs[0][0]['CENTERA1'] - (self.allHdrs[0][0]['SIZAXIS1']//2 + 2)
-                dY_subcen = self.allHdrs[0][0]['CENTERA2'] - (self.allHdrs[0][0]['SIZAXIS2']//2 + 2)
+                # Bar occulter positions do not require a shift.
+                if 'bar' in self.obsMode:
+                    dX_subcen = self.allHdrs[0][0]['CENTERA1'] - (self.allHdrs[0][0]['SIZAXIS1']//2)
+                    dY_subcen = self.allHdrs[0][0]['CENTERA2'] - (self.allHdrs[0][0]['SIZAXIS2']//2)
+                else:
+                    dX_subcen = self.allHdrs[0][0]['CENTERA1'] - (self.allHdrs[0][0]['SIZAXIS1']//2 + 2)
+                    dY_subcen = self.allHdrs[0][0]['CENTERA2'] - (self.allHdrs[0][0]['SIZAXIS2']//2 + 2)
                 commonMask_star_X = np.nanmean(stars, axis=0)[1] + dX_subcen
                 commonMask_star_Y = np.nanmean(stars, axis=0)[0] + dY_subcen
                 alignMasks = shift_pix_to_pix(gaussian_filter(commonMask, 0.5),
