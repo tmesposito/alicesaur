@@ -1019,8 +1019,10 @@ class Pipeline(object):
                 # Correct for subarray center shift compared to full array.
                 # Bar occulter positions do not require a shift.
                 if 'bar' in self.obsMode:
-                    dX_subcen = self.allHdrs[0][0]['CENTERA1'] - (self.allHdrs[0][0]['SIZAXIS1']//2)
-                    dY_subcen = self.allHdrs[0][0]['CENTERA2'] - (self.allHdrs[0][0]['SIZAXIS2']//2)
+                    # dX_subcen = self.allHdrs[0][0]['CENTERA1'] - (self.allHdrs[0][0]['SIZAXIS1']//2)
+                    # dY_subcen = self.allHdrs[0][0]['CENTERA2'] - (self.allHdrs[0][0]['SIZAXIS2']//2)
+                    dX_subcen = 0
+                    dY_subcen = 0
                 else:
                     dX_subcen = self.allHdrs[0][0]['CENTERA1'] - (self.allHdrs[0][0]['SIZAXIS1']//2 + 2)
                     dY_subcen = self.allHdrs[0][0]['CENTERA2'] - (self.allHdrs[0][0]['SIZAXIS2']//2 + 2)
@@ -2795,6 +2797,9 @@ class Pipeline(object):
         # Basic ADI PSF subtraction.
         elif psfSubMode.lower() == 'adi':
             self.logger.info("Performing ADI PSF subtraction...")
+            # Avoid including each science image as a reference for itself by
+            # asserting a small PA rotation exclusion criterion.
+            self.deltaPAMin = 0.1 # [deg]
             rmin = 1 # PSFsub masking supercedes this value.
             getRadProf = info[obsMode].get('radProfSub')
             if getRadProf and (getRadProf is not None):
