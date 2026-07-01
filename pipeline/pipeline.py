@@ -69,7 +69,7 @@ class Pipeline(object):
     instrument = 'stis'
     # Observation mode; typically the occulter position.
     obsMode = ''
-    # Image plate scale.
+    # Assume the STIS image plate scale as default.
     pscale = 0.05075 # [arcsec/pixel] Nguyen et al. 2021
     # Image dimensions.
     imgShape = np.array([1024, 1024]) # [Y,X pixels]
@@ -2799,7 +2799,8 @@ class Pipeline(object):
             self.logger.info("Performing ADI PSF subtraction...")
             # Avoid including each science image as a reference for itself by
             # asserting a small PA rotation exclusion criterion.
-            self.deltaPAMin = 0.1 # [deg]
+            if self.deltaPAMin is None:
+                self.deltaPAMin = 0.1 # [deg]
             rmin = 1 # PSFsub masking supercedes this value.
             getRadProf = info[obsMode].get('radProfSub')
             if getRadProf and (getRadProf is not None):
