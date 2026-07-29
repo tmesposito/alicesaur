@@ -1018,7 +1018,7 @@ class Pipeline(object):
             if self.allHdrs[0][0].get('SUBARRAY', False):
                 # Correct for subarray center shift compared to full array.
                 # Bar occulter positions do not require a shift.
-                if 'bar' in self.obsMode:
+                if ('bar' in self.obsMode) and (self.allHdrs[0][0].get('SIZAXIS2', 0) <= 400):
                     # dX_subcen = self.allHdrs[0][0]['CENTERA1'] - (self.allHdrs[0][0]['SIZAXIS1']//2)
                     # dY_subcen = self.allHdrs[0][0]['CENTERA2'] - (self.allHdrs[0][0]['SIZAXIS2']//2)
                     dX_subcen = 0
